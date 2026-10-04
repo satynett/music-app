@@ -181,3 +181,62 @@ input[type=range] { accent-color:#8c7bff; }
   .visualizer { height: 125px; }
   .visualizer-overlay strong { max-width: 55%; }
 }
+
+/* YouTube result actions */
+.yt-result-row {
+  grid-template-columns: 35px minmax(180px, 1fr) auto;
+  gap: 15px;
+}
+
+.yt-result-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.result-action,
+.playlist-select {
+  border: 1px solid #303541;
+  border-radius: 999px;
+  padding: 7px 10px;
+  background: #10131a;
+  color: #dce0ea;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.result-action:hover:not(:disabled),
+.playlist-select:hover:not(:disabled) {
+  background: #191d26;
+  border-color: #454c5c;
+}
+
+.result-action:disabled,
+.playlist-select:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+.play-result {
+  background: #f4f5f7;
+  color: #0b0d12;
+  border-color: #f4f5f7;
+}
+
+.playlist-select {
+  appearance: auto;
+  cursor: pointer;
+}
+
+@media(max-width:720px) {
+  .yt-result-row {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .yt-result-actions {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+}
