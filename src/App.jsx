@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { SmartPlayer } from "./audio/SmartPlayer";
 import { analyzeTrack, chooseTransition } from "./audio/analyzer";
 import { localTracks } from "./music/library";
+import { AudioVisualizer } from "./components/AudioVisualizer";
 
 function formatTime(value) {
   if (!Number.isFinite(value)) return "0:00";
@@ -19,6 +20,7 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [message, setMessage] = useState("Add your local music to get started.");
   const [analysis, setAnalysis] = useState(null);
+  const [blend, setBlend] = useState(null);
 
   const queueRef = useRef(queue);
   const analyses = useRef(new Map());
@@ -33,6 +35,14 @@ export default function App() {
       setDuration(state.duration);
       if (state.playing !== undefined) setPlaying(state.playing);
       if (state.ended) setPlaying(false);
+
+      if (state.transitionStart) {
+        setBlend({
+          title: queueRef.current.find((track) => track.id === state.transitionTrackId)?.title || "Next track",
+          seconds: state.transitionSeconds || 6,
+        });
+        window.setTimeout(() => setBlend(null), (state.transitionSeconds || 6) * 1000);
+      }
 
       if (state.transitionTrackId) {
         const nextIndex = queueRef.current.findIndex(
@@ -220,10 +230,24 @@ export default function App() {
         </div>
 
         <div className="details">
+          <AudioVisualizer
+            player={localPlayer}
+            playing={playing}
+            blending={Boolean(blend)}
+            currentTitle={current?.title || "Current track"}
+            nextTitle={blend?.title || ""}
+          />
           <p className="eyebrow">LOCAL · NOW PLAYING</p>
           <h1>{current?.title || "Your music library"}</h1>
           <p className="artist">{current?.artist || "Add music to begin"}</p>
           <p className="status">{message}</p>
+
+          <div className="now-playing-meta">
+            <span className={playing ? "live-dot" : ""}>{playing ? "LIVE" : "PAUSED"}</span>
+            <span>{queue.length} tracks</span>
+            {analysis?.bpmA && <span>{analysis.bpmA} BPM</span>}
+            {blend && <span className="blend-chip">↗ {blend.seconds}s blend</span>}
+          </div>
 
           <div className="progress-row">
             <span>{formatTime(position)}</span>
