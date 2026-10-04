@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SmartPlayer } from "./audio/SmartPlayer";
+import { analyzeTrack, decodeAudioFile, chooseTransition } from "./audio/analyzer";
 
 const demoTracks = [
   {
@@ -34,7 +35,9 @@ export default function App() {
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(0.9);
   const [smart, setSmart] = useState(true);
-  const [message, setMessage] = useState("Ready for smooth transitions.");
+  const analyses = useRef(new Map());
+  const [message, setMessage] = useState("Ready for intelligent transitions.");
+  const [analysis, setAnalysis] = useState(null);
 
   const current = queue[index];
 
@@ -62,15 +65,51 @@ export default function App() {
     await player.play(current);
   }
 
+  async function getAnalysis(track) {
+    if (analyses.current.has(track.id)) return analyses.current.get(track.id);
+    setMessage(`Analyzing ${track.title}…`);
+    const ctx = new AudioContext();
+    const response = await fetch(track.url);
+    const buffer = await ctx.decodeAudioData(await response.arrayBuffer());
+    const result = analyzeTrack(buffer);
+    await ctx.close();
+    analyses.current.set(track.id, result);
+    return result;
+  }
+
   async function next() {
     const nextIndex = (index + 1) % queue.length;
     const nextTrack = queue[nextIndex];
-    setMessage(smart ? "Finding the smoothest entry…" : "Crossfading…");
 
-    const startAt = smart ? 2 : 0;
-    await player.crossfade(nextTrack, 4000, startAt);
+    if (!smart) {
+      await player.crossfade(nextTrack, { crossfadeSeconds: 4, entryAt: 0 });
+      setIndex(nextIndex);
+      setMessage("4-second crossfade");
+      return;
+    }
+
+    const [a, b] = await Promise.all([getAnalysis(current), getAnalysis(nextTrack)]);
+    const transition = chooseTransition(a, b);
+    setAnalysis({ ...transition, nextTitle: nextTrack.title });
+    await player.crossfade(nextTrack, transition);
     setIndex(nextIndex);
-    setMessage(smart ? `Smart entry: ${startAt}s` : "Crossfade complete");
+    setMessage(`Smart: A ends ${formatTime(transition.exitAt)} → B starts ${transition.entryAt.toFixed(1)}s → ${transition.crossfadeSeconds}s blend`);
+  }
+
+  async function addFiles(event) {
+    const files = [...event.target.files];
+    for (const file of files) {
+      const objectUrl = URL.createObjectURL(file);
+      const ctx = new AudioContext();
+      const buffer = await decodeAudioFile(file, ctx);
+      const result = analyzeTrack(buffer);
+      await ctx.close();
+      const id = `${file.name}-${file.lastModified}`;
+      const track = { id, title: file.name.replace(/\.[^/.]+$/, ""), artist: "Local file", color: "#20242d", url: objectUrl };
+      analyses.current.set(id, result);
+      setQueue((items) => [...items, track]);
+    }
+    if (files.length) setMessage(`${files.length} track(s) analyzed and added`);
   }
 
   function previous() {
@@ -150,6 +189,15 @@ export default function App() {
               <input type="range" min="0" max="1" step="0.01" value={volume} onChange={changeVolume} />
             </label>
           </div>
+          {analysis && (
+            <div className="analysis-card">
+              <strong>Transition plan</strong>
+              <span>Exit A: {formatTime(analysis.exitAt)}</span>
+              <span>Entry B: {analysis.entryAt.toFixed(1)}s</span>
+              <span>Blend: {analysis.crossfadeSeconds}s</span>
+              <span>BPM: {analysis.bpmA ?? "?"} → {analysis.bpmB ?? "?"}</span>
+            </div>
+          )}
         </div>
       </section>
 
