@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SmartPlayer } from "./audio/SmartPlayer";
-import { analyzeTrack, decodeAudioFile, chooseTransition } from "./audio/analyzer";
+import { analyzeTrack, chooseTransition } from "./audio/analyzer";
+import { localTracks } from "./music/library";
 
 function formatTime(value) {
   if (!Number.isFinite(value)) return "0:00";
@@ -8,7 +9,7 @@ function formatTime(value) {
 }
 
 export default function App() {
-  const [queue, setQueue] = useState([]);
+  const [queue, setQueue] = useState(localTracks);
   const [index, setIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [position, setPosition] = useState(0);
@@ -157,42 +158,14 @@ export default function App() {
     localPlayer.setVolume(value);
   }
 
-  async function addFiles(event) {
-    const files = [...event.target.files];
-    if (!files.length) return;
-
-    try {
-      const additions = [];
-
-      for (const file of files) {
-        const objectUrl = URL.createObjectURL(file);
-        const ctx = new AudioContext();
-        const buffer = await decodeAudioFile(file, ctx);
-        const result = analyzeTrack(buffer);
-        await ctx.close();
-
-        const id = `${file.name}-${file.lastModified}`;
-        const track = {
-          id,
-          title: file.name.replace(/\.[^/.]+$/, ""),
-          artist: "Local file",
-          color: "#20242d",
-          url: objectUrl,
-          source: "local",
-        };
-
-        analyses.current.set(id, result);
-        additions.push(track);
-      }
-
-      setQueue((items) => [...items, ...additions]);
-      if (!queue.length && additions.length) setIndex(0);
-      setMessage(`${additions.length} track(s) added and analyzed.`);
-    } catch (error) {
-      setMessage(`Could not add music: ${error.message}`);
-    }
-
-    event.target.value = "";
+  function refreshLibrary() {
+    setQueue(localTracks);
+    setIndex((currentIndex) => Math.min(currentIndex, Math.max(localTracks.length - 1, 0)));
+    setMessage(
+      localTracks.length
+        ? `${localTracks.length} local track(s) loaded from src/music/audio.`
+        : "Add audio files to src/music/audio, then restart Vite."
+    );
   }
 
   function searchLocal() {
@@ -220,15 +193,9 @@ export default function App() {
         <div className="top-actions">
           <span className="pill active">Local Music</span>
 
-          <label className="upload">
-            + Add music
-            <input
-              type="file"
-              accept="audio/*"
-              multiple
-              onChange={addFiles}
-            />
-          </label>
+          <button className="upload" onClick={refreshLibrary}>
+            ↻ Reload library
+          </button>
         </div>
       </header>
 
