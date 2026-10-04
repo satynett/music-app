@@ -4,6 +4,7 @@ export class SmartPlayer {
     this.current = null;
     this.next = null;
     this.transition = null;
+    this.transitionToken = 0;
     this.onStateChange = onStateChange;
     this.volume = 0.9;
     this.analyser = null;
@@ -25,8 +26,6 @@ export class SmartPlayer {
   }
 
   getAnalyser() {
-    // Do not create/resume AudioContext from the visualizer.
-    // Chrome requires Web Audio startup to follow a user gesture.
     return this.analyser;
   }
 
@@ -38,25 +37,35 @@ export class SmartPlayer {
     });
   }
 
- createAudio(track, initialGain = this.volume) {
-  const ctx = this.ensureContext();
-  const element = new Audio();
-  
-  // Important for CORS + Web Audio API
-  element.crossOrigin = "anonymous";
-  
-  element.src = track.url;
-  element.preload = "auto";
+  createAudio(track, initialGain = this.volume) {
+    const ctx = this.ensureContext();
+    const element = new Audio();
 
-  const source = ctx.createMediaElementSource(element);
-  const gain = ctx.createGain();
-  gain.gain.value = initialGain;
+    element.crossOrigin = "anonymous";
+    element.src = track.url;
+    element.preload = "auto";
 
-  source.connect(gain).connect(this.analyser);
-  return { track, element, source, gain };
-}
+    const source = ctx.createMediaElementSource(element);
+    const gain = ctx.createGain();
+    gain.gain.value = initialGain;
+
+    source.connect(gain).connect(this.analyser);
+    return { track, element, source, gain };
+  }
+
+  cancelTransition() {
+    this.transitionToken += 1;
+    this.transition = null;
+
+    if (this.next) {
+      this.stopSource(this.next);
+      this.next = null;
+    }
+  }
 
   load(track, startAt = 0, initialGain = 0) {
+    this.cancelTransition();
+
     if (this.current) this.stopSource(this.current);
 
     const item = this.createAudio(track, initialGain);
@@ -93,8 +102,6 @@ export class SmartPlayer {
     const ctx = this.ensureContext();
 
     await item.element.play();
-
-    // Every explicit start/resume gets a smooth 2-second fade-in.
     this.fadeGain(item.gain, 0, this.volume, 2000);
 
     this.emit({ playing: true });
@@ -125,6 +132,7 @@ export class SmartPlayer {
   }
 
   scheduleTransition(nextTrack, transition, onComplete) {
+    this.cancelTransition();
     this.transition = { nextTrack, transition, started: false, onComplete };
     this.maybeTransition();
   }
@@ -146,10 +154,11 @@ export class SmartPlayer {
   async crossfade(nextTrack, transition = {}, onComplete) {
     const { crossfadeSeconds = 4, entryAt = 0 } = transition;
     const ctx = this.ensureContext();
+    const token = ++this.transitionToken;
 
     if (!this.current) {
       await this.play(nextTrack, entryAt);
-      onComplete?.();
+      if (token === this.transitionToken) onComplete?.();
       return;
     }
 
@@ -157,22 +166,30 @@ export class SmartPlayer {
     const next = this.createAudio(nextTrack, 0);
     this.next = next;
 
+    let started = false;
     await new Promise((resolve, reject) => {
-  const start = () => {
-    next.element.currentTime = entryAt;
-    next.element.play().then(resolve).catch(reject);
-  };
+      const start = () => {
+        if (started || token !== this.transitionToken) return;
+        started = true;
+        next.element.currentTime = entryAt;
+        next.element.play().then(resolve).catch(reject);
+      };
 
-  if (next.element.readyState >= 3) {
-    start();
-  } else {
-    next.element.addEventListener("canplaythrough", start, { once: true });
-    // Safety timeout
-    setTimeout(() => {
-      if (next.element.readyState >= 2) start();
-    }, 4000);
-  }
-});
+      if (next.element.readyState >= 3) {
+        start();
+      } else {
+        next.element.addEventListener("canplaythrough", start, { once: true });
+        setTimeout(() => {
+          if (next.element.readyState >= 2) start();
+        }, 4000);
+      }
+    });
+
+    if (token !== this.transitionToken) {
+      this.stopSource(next);
+      if (this.next === next) this.next = null;
+      return;
+    }
 
     const now = ctx.currentTime;
 
@@ -185,8 +202,6 @@ export class SmartPlayer {
 
     old.gain.gain.cancelScheduledValues(now);
     next.gain.gain.cancelScheduledValues(now);
-
-    // Equal-power style crossfade: both tracks are clearly audible in the middle.
     old.gain.gain.setValueAtTime(old.gain.gain.value, now);
     next.gain.gain.setValueAtTime(0, now);
 
@@ -205,7 +220,17 @@ export class SmartPlayer {
       window.setTimeout(resolve, crossfadeSeconds * 1000)
     );
 
+    if (token !== this.transitionToken) {
+      this.stopSource(next);
+      return;
+    }
+
+    // The blend is complete: the outgoing track must be fully stopped.
+    old.gain.gain.cancelScheduledValues(ctx.currentTime);
+    old.gain.gain.setValueAtTime(0, ctx.currentTime);
+    old.element.pause();
     this.stopSource(old);
+
     this.current = next;
     this.next = null;
     this.transition = null;
@@ -238,8 +263,8 @@ export class SmartPlayer {
   }
 
   destroy() {
+    this.cancelTransition();
     this.stopSource(this.current);
-    this.stopSource(this.next);
     try { this.analyser?.disconnect(); } catch {}
     this.audioContext?.close();
   }
