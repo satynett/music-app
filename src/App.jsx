@@ -37,8 +37,12 @@ export default function App() {
       if (state.ended) setPlaying(false);
 
       if (state.transitionStart) {
+        const currentTrack = queueRef.current.find((track) => track.id === state.transitionFromTrackId);
+        const nextTrack = queueRef.current.find((track) => track.id === state.transitionTrackId);
+
         setBlend({
-          title: queueRef.current.find((track) => track.id === state.transitionTrackId)?.title || "Next track",
+          currentTitle: currentTrack?.title || "Current track",
+          nextTitle: nextTrack?.title || "Next track",
           seconds: state.transitionSeconds || 6,
         });
         window.setTimeout(() => setBlend(null), (state.transitionSeconds || 6) * 1000);
@@ -220,23 +224,26 @@ export default function App() {
       </section>
 
       <section className="hero">
-        <div
-          className="art"
-          style={{
-            background: `linear-gradient(135deg, ${current?.color || "#4c5cff"}, #10131a)`,
-          }}
-        >
-          <span>♫</span>
-        </div>
+        <div className="art-column">
+          <div
+            className="art"
+            style={{
+              background: `linear-gradient(135deg, ${current?.color || "#4c5cff"}, #10131a)`,
+            }}
+          >
+            <span>♫</span>
+          </div>
 
-        <div className="details">
           <AudioVisualizer
             player={localPlayer}
             playing={playing}
             blending={Boolean(blend)}
-            currentTitle={current?.title || "Current track"}
-            nextTitle={blend?.title || ""}
+            currentTitle={blend?.currentTitle || current?.title || "Current track"}
+            nextTitle={blend?.nextTitle || ""}
           />
+        </div>
+
+        <div className="details">
           <p className="eyebrow">LOCAL · NOW PLAYING</p>
           <h1>{current?.title || "Your music library"}</h1>
           <p className="artist">{current?.artist || "Add music to begin"}</p>
@@ -246,7 +253,7 @@ export default function App() {
             <span className={playing ? "live-dot" : ""}>{playing ? "LIVE" : "PAUSED"}</span>
             <span>{queue.length} tracks</span>
             {analysis?.bpmA && <span>{analysis.bpmA} BPM</span>}
-            {blend && <span className="blend-chip">↗ {blend.seconds}s blend</span>}
+            {blend && <span className="blend-chip">↗ {blend.currentTitle} → {blend.nextTitle}</span>}
           </div>
 
           <div className="progress-row">
@@ -312,7 +319,7 @@ export default function App() {
               <span>Entry B: {analysis.entryAt.toFixed(1)}s</span>
               <span>Blend: {analysis.crossfadeSeconds}s</span>
               <span>BPM: {analysis.bpmA ?? "?"} → {analysis.bpmB ?? "?"}</span>
-              <span>Next: {analysis.nextTitle}</span>
+              <span>Current → Next: {current?.title || "Current"} → {analysis.nextTitle}</span>
             </div>
           )}
         </div>
