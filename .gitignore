@@ -4,3 +4,5 @@ dist/
 .env
 music/*
 !music/.gitkeep
+src/music/audio/*
+!src/music/audio/.gitkeep
