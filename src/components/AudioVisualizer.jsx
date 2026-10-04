@@ -72,7 +72,7 @@ export function AudioVisualizer({ player, playing, blending, currentTitle, nextT
       cancelAnimationFrame(frame);
       window.removeEventListener("resize", resize);
     };
-  }, [player, blending]);
+  }, [player, playing, blending]);
 
   return (
     <div className={`visualizer ${playing ? "is-playing" : ""} ${blending ? "is-blending" : ""}`}>
