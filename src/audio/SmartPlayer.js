@@ -167,6 +167,7 @@ export class SmartPlayer {
 
     this.emit({
       transitionStart: true,
+      transitionFromTrackId: old.track.id,
       transitionTrackId: nextTrack.id,
       transitionSeconds: crossfadeSeconds,
     });
