@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SmartPlayer } from "./audio/SmartPlayer";
 import { analyzeTrack, chooseTransition } from "./audio/analyzer";
-import { localTracks } from "./music/library";
 import { AudioVisualizer } from "./components/AudioVisualizer";
 import { searchYoutube, getStreamInfo, createYoutubeTrack } from "./api";
 
@@ -11,7 +10,7 @@ function formatTime(value) {
 }
 
 export default function App() {
-  const [queue, setQueue] = useState(localTracks);
+  const [queue, setQueue] = useState([]);
   const [index, setIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [position, setPosition] = useState(0);
@@ -19,11 +18,9 @@ export default function App() {
   const [volume, setVolume] = useState(0.9);
   const [smart, setSmart] = useState(true);
   const [query, setQuery] = useState("");
-  const [message, setMessage] = useState("Add local music or search YouTube.");
+  const [message, setMessage] = useState("Search YouTube for music.");
   const [analysis, setAnalysis] = useState(null);
   const [blend, setBlend] = useState(null);
-
-  const [searchMode, setSearchMode] = useState("local");
   const [ytResults, setYtResults] = useState([]);
   const [searching, setSearching] = useState(false);
   const [loadingTrackId, setLoadingTrackId] = useState(null);
@@ -35,7 +32,7 @@ export default function App() {
     queueRef.current = queue;
   }, [queue]);
 
-  const localPlayer = useMemo(() => new SmartPlayer({
+  const player = useMemo(() => new SmartPlayer({
     onStateChange: (state) => {
       setPosition(state.currentTime);
       setDuration(state.duration);
@@ -62,62 +59,58 @@ export default function App() {
 
   const current = queue[index];
 
-  useEffect(() => () => localPlayer.destroy(), [localPlayer]);
+  useEffect(() => () => player.destroy(), [player]);
 
   async function getAnalysis(track) {
-  if (analyses.current.has(track.id)) {
-    return analyses.current.get(track.id);
+    if (analyses.current.has(track.id)) return analyses.current.get(track.id);
+
+    const ctx = new AudioContext();
+
+    try {
+      const response = await fetch(track.url);
+      if (!response.ok) throw new Error("Failed to fetch audio");
+
+      const arrayBuffer = await response.arrayBuffer();
+      const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+
+      const result = analyzeTrack(audioBuffer, {
+        analysisSeconds: 25,
+        maxEntry: 12,
+      });
+
+      analyses.current.set(track.id, result);
+      return result;
+    } catch (err) {
+      console.warn("Analysis failed for", track.title, err);
+      const fallback = {
+        duration: track.duration || 180,
+        bpm: null,
+        recommendedStart: 0,
+        reason: "Fallback - analysis failed",
+      };
+      analyses.current.set(track.id, fallback);
+      return fallback;
+    } finally {
+      await ctx.close();
+    }
   }
-
-  const ctx = new AudioContext();
-
-  try {
-    const response = await fetch(track.url);
-    if (!response.ok) throw new Error("Failed to fetch audio");
-
-    const arrayBuffer = await response.arrayBuffer();
-    const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
-
-    const result = analyzeTrack(audioBuffer, {
-      analysisSeconds: 25,     // analyze more of the intro
-      maxEntry: 12,
-    });
-
-    analyses.current.set(track.id, result);
-    return result;
-  } catch (err) {
-    console.warn("Analysis failed for", track.title, err);
-
-    // Fallback so transition still works
-    const fallback = {
-      duration: track.duration || 180,
-      bpm: null,
-      recommendedStart: 0,
-      reason: "Fallback - analysis failed",
-    };
-    analyses.current.set(track.id, fallback);
-    return fallback;
-  } finally {
-    await ctx.close();
-  }
-}
 
   async function playTrack(track, trackIndex = null) {
     if (!track) return;
     const nextIndex = trackIndex ?? queue.findIndex((item) => item.id === track.id);
     if (nextIndex >= 0) setIndex(nextIndex);
-    setMessage(track.source === "youtube" ? "Playing YouTube stream…" : "Playing local audio.");
-    await localPlayer.play(track);
+    setMessage(`Playing “${track.title}”`);
+    await player.play(track);
   }
 
   async function togglePlay() {
-    if (!current) return setMessage("Add a track first.");
+    if (!current) return setMessage("Search and play a track first.");
     try {
       if (playing) {
         setMessage("Fading out…");
-        await localPlayer.fadePause(2000);
+        await player.fadePause(2000);
       } else {
-        await localPlayer.play(current);
+        await player.play(current);
         setMessage("Playing.");
       }
     } catch (error) {
@@ -126,110 +119,85 @@ export default function App() {
   }
 
   async function next() {
-  if (!queue.length || !current) return;
+    if (!queue.length || !current) return;
 
-  const nextIndex = (index + 1) % queue.length;
-  const nextTrack = queue[nextIndex];
+    const nextIndex = (index + 1) % queue.length;
+    const nextTrack = queue[nextIndex];
 
-  try {
-    setMessage("Preparing smart transition…");
+    try {
+      setMessage("Preparing smart transition…");
 
-    // Analyze both tracks
-    const [currentAnalysis, nextAnalysis] = await Promise.all([
-      getAnalysis(current),
-      getAnalysis(nextTrack),
-    ]);
+      const [currentAnalysis, nextAnalysis] = await Promise.all([
+        getAnalysis(current),
+        getAnalysis(nextTrack),
+      ]);
 
-    let transition;
+      let transition;
 
-    if (smart) {
-      const base = chooseTransition(currentAnalysis, nextAnalysis);
+      if (smart) {
+        const base = chooseTransition(currentAnalysis, nextAnalysis);
+        const crossfadeSeconds = Math.max(5, Math.min(base.crossfadeSeconds || 6, 9));
 
-      // Important: for streaming we force a good crossfade length
-      const crossfadeSeconds = Math.max(5, Math.min(base.crossfadeSeconds || 6, 9));
+        transition = {
+          exitAt: Math.max(0, (currentAnalysis.duration || current.duration || 180) - crossfadeSeconds),
+          entryAt: nextAnalysis.recommendedStart ?? 0,
+          crossfadeSeconds,
+          bpmA: currentAnalysis.bpm,
+          bpmB: nextAnalysis.bpm,
+        };
+      } else {
+        transition = {
+          exitAt: currentAnalysis.duration || 180,
+          entryAt: 0,
+          crossfadeSeconds: 4,
+        };
+      }
 
-      transition = {
-        exitAt: Math.max(0, (currentAnalysis.duration || current.duration || 180) - crossfadeSeconds),
-        entryAt: nextAnalysis.recommendedStart ?? 0,
-        crossfadeSeconds,
-        bpmA: currentAnalysis.bpm,
-        bpmB: nextAnalysis.bpm,
-      };
-    } else {
-      transition = {
-        exitAt: currentAnalysis.duration || 180,
-        entryAt: 0,
-        crossfadeSeconds: 4,
-      };
+      setAnalysis({ ...transition, nextTitle: nextTrack.title });
+      await player.crossfade(nextTrack, transition);
+
+      setIndex(nextIndex);
+      setMessage(
+        smart
+          ? `Smart blend → next song starts at ${transition.entryAt.toFixed(1)}s`
+          : "Crossfade done"
+      );
+    } catch (error) {
+      console.error(error);
+      setMessage("Transition failed: " + error.message);
+      setIndex(nextIndex);
+      await player.play(nextTrack);
     }
-
-    setAnalysis({ ...transition, nextTitle: nextTrack.title });
-
-    // Start the actual crossfade
-    await localPlayer.crossfade(nextTrack, transition);
-
-    setIndex(nextIndex);
-    setMessage(
-      smart
-        ? `Smart blend → next song starts at ${transition.entryAt.toFixed(1)}s`
-        : "Crossfade done"
-    );
-  } catch (error) {
-    console.error(error);
-    setMessage("Transition failed: " + error.message);
-
-    // Fallback: just play the next track normally
-    setIndex(nextIndex);
-    await localPlayer.play(nextTrack);
   }
-}
 
   async function previous() {
     if (!queue.length) return;
     const prevIndex = (index - 1 + queue.length) % queue.length;
     setIndex(prevIndex);
     setAnalysis(null);
-    await localPlayer.play(queue[prevIndex]);
+    await player.play(queue[prevIndex]);
     setMessage("Playing previous track.");
   }
 
   function seek(e) {
     const value = Number(e.target.value);
-    if (localPlayer.current?.element) localPlayer.current.element.currentTime = value;
+    if (player.current?.element) player.current.element.currentTime = value;
     setPosition(value);
   }
 
   function changeVolume(e) {
     const value = Number(e.target.value);
     setVolume(value);
-    localPlayer.setVolume(value);
-  }
-
-  function refreshLibrary() {
-    setQueue(localTracks);
-    setIndex(0);
-    setMessage(localTracks.length ? `${localTracks.length} local tracks loaded.` : "No local tracks found.");
+    player.setVolume(value);
   }
 
   async function handleSearch() {
     if (!query.trim()) return;
 
-    if (searchMode === "local") {
-      const matchIndex = queue.findIndex((t) =>
-        `${t.title} ${t.artist}`.toLowerCase().includes(query.toLowerCase())
-      );
-      if (matchIndex >= 0) {
-        setIndex(matchIndex);
-        setMessage(`Found “${queue[matchIndex].title}”.`);
-      } else {
-        setMessage("No matching local track.");
-      }
-      return;
-    }
-
     setSearching(true);
     setYtResults([]);
     setMessage("Searching YouTube…");
+
     try {
       const results = await searchYoutube(query.trim());
       setYtResults(results);
@@ -244,6 +212,7 @@ export default function App() {
   async function playYoutubeResult(result) {
     setLoadingTrackId(result.id);
     setMessage(`Getting stream for “${result.title}”…`);
+
     try {
       const streamInfo = await getStreamInfo(result.id);
       const track = createYoutubeTrack(streamInfo);
@@ -253,8 +222,11 @@ export default function App() {
         return [...prev, track];
       });
 
-      setIndex(queue.length);
-      await localPlayer.play(track);
+      const existingIndex = queue.findIndex((t) => t.id === track.id);
+      const nextIndex = existingIndex >= 0 ? existingIndex : queue.length;
+      setIndex(nextIndex);
+
+      await player.play(track);
       setMessage(`Playing “${track.title}”`);
       setYtResults([]);
     } catch (err) {
@@ -268,19 +240,11 @@ export default function App() {
     <main className="app">
       <header className="topbar">
         <div className="brand"><span className="brand-dot" />PULSE</div>
-        <div className="top-actions">
-          <button className="upload" onClick={refreshLibrary}>↻ Reload local</button>
-        </div>
       </header>
 
       <section className="search-panel">
         <div className="search-mode">
-          <button className={searchMode === "local" ? "active" : ""} onClick={() => { setSearchMode("local"); setYtResults([]); }}>
-            Local
-          </button>
-          <button className={searchMode === "youtube" ? "active" : ""} onClick={() => setSearchMode("youtube")}>
-            YouTube
-          </button>
+          <button className="active">YouTube</button>
         </div>
 
         <div className="search-row">
@@ -288,7 +252,7 @@ export default function App() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-            placeholder={searchMode === "youtube" ? "Search YouTube Music / songs…" : "Search your local music…"}
+            placeholder="Search YouTube Music / songs…"
           />
           <button onClick={handleSearch} disabled={searching}>
             {searching ? "…" : "Search"}
@@ -296,7 +260,7 @@ export default function App() {
         </div>
       </section>
 
-      {searchMode === "youtube" && ytResults.length > 0 && (
+      {ytResults.length > 0 && (
         <section className="yt-results">
           <div className="queue-head">
             <h2>YouTube Results</h2>
@@ -318,7 +282,7 @@ export default function App() {
       <section className="hero">
         <div className="art-column">
           <AudioVisualizer
-            player={localPlayer}
+            player={player}
             playing={playing}
             blending={Boolean(blend)}
             currentTitle={blend?.currentTitle || current?.title || "Current track"}
@@ -327,9 +291,9 @@ export default function App() {
         </div>
 
         <div className="details">
-          <p className="eyebrow">{current?.source === "youtube" ? "YOUTUBE" : "LOCAL"} · NOW PLAYING</p>
-          <h1>{current?.title || "Your music"}</h1>
-          <p className="artist">{current?.artist || "Search or add music"}</p>
+          <p className="eyebrow">YOUTUBE · NOW PLAYING</p>
+          <h1>{current?.title || "Search for music"}</h1>
+          <p className="artist">{current?.artist || "Search YouTube to start listening"}</p>
           <p className="status">{message}</p>
 
           <div className="now-playing-meta">
@@ -382,7 +346,7 @@ export default function App() {
         {queue.length === 0 ? (
           <div className="empty-state">
             <strong>Queue is empty.</strong>
-            <span>Search YouTube or load local files.</span>
+            <span>Search YouTube to add music.</span>
           </div>
         ) : (
           queue.map((track, i) => (
@@ -390,7 +354,7 @@ export default function App() {
               <span className="track-number">{i + 1}</span>
               <span className="track-info">
                 <strong>{track.title}</strong>
-                <small>{track.artist} · {track.source === "youtube" ? "YouTube" : "Local"}</small>
+                <small>{track.artist} · YouTube</small>
               </span>
               <span>{i === index && playing ? "Playing" : "Play"}</span>
             </button>
