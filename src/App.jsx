@@ -37,15 +37,18 @@ export default function App() {
   const [spotifyConnected, setSpotifyConnected] = useState(false);
   const [spotifyDeviceId, setSpotifyDeviceId] = useState(null);
 
+  const modeRef = useRef(mode);
+  useEffect(() => { modeRef.current = mode; }, [mode]);
+
   const localPlayer = useMemo(() => new SmartPlayer({
     onStateChange: (state) => {
-      if (mode !== "local") return;
+      if (modeRef.current !== "local") return;
       setPosition(state.currentTime);
       setDuration(state.duration);
       if (state.playing !== undefined) setPlaying(state.playing);
       if (state.ended) setPlaying(false);
     },
-  }), [mode]);
+  }), []);
 
   const spotifyPlayerRef = useRef(null);
   const youtubePlayerRef = useRef(null);
