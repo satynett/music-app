@@ -38,19 +38,23 @@ export class SmartPlayer {
     });
   }
 
-  createAudio(track, initialGain = this.volume) {
-    const ctx = this.ensureContext();
-    const element = new Audio();
-    element.src = track.url;
-    element.preload = "auto";
+ createAudio(track, initialGain = this.volume) {
+  const ctx = this.ensureContext();
+  const element = new Audio();
+  
+  // Important for CORS + Web Audio API
+  element.crossOrigin = "anonymous";
+  
+  element.src = track.url;
+  element.preload = "auto";
 
-    const source = ctx.createMediaElementSource(element);
-    const gain = ctx.createGain();
-    gain.gain.value = initialGain;
+  const source = ctx.createMediaElementSource(element);
+  const gain = ctx.createGain();
+  gain.gain.value = initialGain;
 
-    source.connect(gain).connect(this.analyser);
-    return { track, element, source, gain };
-  }
+  source.connect(gain).connect(this.analyser);
+  return { track, element, source, gain };
+}
 
   load(track, startAt = 0, initialGain = 0) {
     if (this.current) this.stopSource(this.current);
@@ -154,14 +158,21 @@ export class SmartPlayer {
     this.next = next;
 
     await new Promise((resolve, reject) => {
-      const start = () => {
-        next.element.currentTime = entryAt;
-        next.element.play().then(resolve).catch(reject);
-      };
+  const start = () => {
+    next.element.currentTime = entryAt;
+    next.element.play().then(resolve).catch(reject);
+  };
 
+  if (next.element.readyState >= 3) {
+    start();
+  } else {
+    next.element.addEventListener("canplaythrough", start, { once: true });
+    // Safety timeout
+    setTimeout(() => {
       if (next.element.readyState >= 2) start();
-      else next.element.addEventListener("canplay", start, { once: true });
-    });
+    }, 4000);
+  }
+});
 
     const now = ctx.currentTime;
 
