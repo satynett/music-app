@@ -67,8 +67,12 @@ export class SmartPlayer {
     const now = ctx.currentTime;
 
     gain.gain.cancelScheduledValues(now);
-    gain.gain.setValueAtTime(gain.gain.value, now);
-    gain.gain.linearRampToValueAtTime(0, now + duration / 1000);
+    const step = duration / 4 / 1000;
+    gain.gain.setValueAtTime(1, now);
+    gain.gain.linearRampToValueAtTime(0.75, now + step);
+    gain.gain.linearRampToValueAtTime(0.5, now + step * 2);
+    gain.gain.linearRampToValueAtTime(0.25, now + step * 3);
+    gain.gain.linearRampToValueAtTime(0, now + step * 4);
 
     window.setTimeout(() => {
       element.pause();
