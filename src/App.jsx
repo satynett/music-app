@@ -107,7 +107,7 @@ export default function App() {
             // Smart analysis still chooses the blend duration and B's entry point.
             exitAt: a.duration,
             entryAt: b.recommendedStart ?? 0,
-            crossfadeSeconds: chooseTransition(a, b).crossfadeSeconds,
+            crossfadeSeconds: Math.max(6, chooseTransition(a, b).crossfadeSeconds),
             bpmA: a.bpm,
             bpmB: b.bpm,
           }
