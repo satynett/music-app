@@ -152,11 +152,20 @@ export class SmartPlayer {
     old.gain.gain.cancelScheduledValues(now);
     next.gain.gain.cancelScheduledValues(now);
 
+    // Equal-power style crossfade: both tracks are clearly audible in the middle.
     old.gain.gain.setValueAtTime(old.gain.gain.value, now);
     next.gain.gain.setValueAtTime(0, now);
 
-    old.gain.gain.linearRampToValueAtTime(0, now + crossfadeSeconds);
-    next.gain.gain.linearRampToValueAtTime(this.volume, now + crossfadeSeconds);
+    const steps = 32;
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const time = now + t * crossfadeSeconds;
+      const oldGain = Math.cos(t * Math.PI / 2) * this.volume;
+      const nextGain = Math.sin(t * Math.PI / 2) * this.volume;
+
+      old.gain.gain.linearRampToValueAtTime(oldGain, time);
+      next.gain.gain.linearRampToValueAtTime(nextGain, time);
+    }
 
     await new Promise((resolve) =>
       window.setTimeout(resolve, crossfadeSeconds * 1000)
