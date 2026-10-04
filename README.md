@@ -1,48 +1,57 @@
 # PULSE Music App
 
-Provider-aware music player built with React + Vite.
+A local-first music player built with React + Vite. The current MVP is focused entirely on local audio so the Smart Transition engine can control the actual audio signal.
 
-## Playback modes
+## Current MVP
 
-- **Local:** upload audio, Web Audio playback, stepped fade-out, analysis, scheduled smart crossfade.
-- **Spotify:** official Spotify Web Playback SDK + Web API, OAuth PKCE, search and browser playback.
-- **YouTube:** YouTube Data API search + official YouTube IFrame Player API playback.
+- Local music playback
+- Add multiple audio files
+- Search local queue
+- Play / pause / next / previous
+- 2-second stop fade: 100% → 75% → 50% → 25% → 0%
+- Crossfade: outgoing track fades down while the next track fades up
+- Smart transition analysis: intro energy, silence, onset and approximate BPM
+- Recommended entry point for the next track
+- Crossfade duration based on analyzed tracks
+- Scheduled transition at the calculated exit point
+- `music/` folder reserved for local music files and ignored by Git
 
-Spotify Web Playback requires Premium. Spotify content is not processed through our Smart Transition engine. YouTube playback stays inside the official YouTube player.
+## Music folder
 
-## Setup
+The repository contains a blank `music/` folder placeholder.
 
-Copy `.env.example` to `.env` and set:
+Put your local music files inside:
 
-```
-VITE_SPOTIFY_CLIENT_ID=your_spotify_client_id
-VITE_YOUTUBE_API_KEY=your_youtube_api_key
-```
+    music/
+      song-1.mp3
+      song-2.mp3
+      song-3.wav
 
-### Spotify
+Music files are ignored by Git so your personal audio is not accidentally committed to the repository.
 
-Create an app in the Spotify Developer Dashboard and add the exact redirect URI:
-- Local: `http://127.0.0.1:5173/callback`
-- Production: `https://YOUR_DOMAIN/callback`
-
-Use PKCE; do not put a Spotify Client Secret in this browser app.
-
-### YouTube
-
-Enable **YouTube Data API v3** in Google Cloud, create an API key, and restrict it by HTTP referrer/domain before production.
+For the current browser MVP, use **+ Add music** to load those files into the player. Later we can add automatic library discovery and persistent metadata.
 
 ## Run
 
-```bash
-npm install
-npm run dev
-```
+    npm install
+    npm run dev
 
 ## Architecture
 
-```
-React UI
-  ├── Local -> SmartPlayer -> Web Audio API
-  ├── Spotify -> Spotify Web Playback SDK
-  └── YouTube -> YouTube IFrame Player API
-```
+    React UI
+       ↓
+    Local Music Queue
+       ↓
+    SmartPlayer
+       ├── Fade Controller
+       ├── Crossfade Controller
+       └── Web Audio routing
+              ↓
+       Audio Analyzer
+       ├── Energy
+       ├── Silence
+       ├── Onset
+       ├── Approx. BPM
+       └── Recommended entry point
+
+The browser Web Audio API provides the audio graph and gain control used for fades and crossfades.
