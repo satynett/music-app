@@ -101,9 +101,17 @@ export default function App() {
       ]);
 
       const transition = smart
-        ? chooseTransition(a, b)
+        ? {
+            // Manual Next should crossfade NOW.
+            // Smart analysis still chooses the blend duration and B's entry point.
+            exitAt: a.duration,
+            entryAt: b.recommendedStart ?? 0,
+            crossfadeSeconds: chooseTransition(a, b).crossfadeSeconds,
+            bpmA: a.bpm,
+            bpmB: b.bpm,
+          }
         : {
-            exitAt: Math.max(0, a.duration - 4),
+            exitAt: a.duration,
             entryAt: 0,
             crossfadeSeconds: 4,
             bpmA: a.bpm,
@@ -112,20 +120,14 @@ export default function App() {
 
       setAnalysis({ ...transition, nextTitle: nextTrack.title });
 
-      if (smart) {
-        localPlayer.scheduleTransition(
-          nextTrack,
-          transition,
-          () => setIndex(nextIndex)
-        );
-        setMessage(
-          `Smart transition: ${formatTime(transition.exitAt)} → ${transition.entryAt.toFixed(1)}s`
-        );
-      } else {
-        await localPlayer.crossfade(nextTrack, transition);
-        setIndex(nextIndex);
-        setMessage("Crossfade complete.");
-      }
+      // The Next button means "change now", so start both tracks together.
+      await localPlayer.crossfade(nextTrack, transition);
+      setIndex(nextIndex);
+      setMessage(
+        smart
+          ? `Smart crossfade: new track starts at ${transition.entryAt.toFixed(1)}s`
+          : "Crossfade complete."
+      );
     } catch (error) {
       setMessage(error.message);
     }
