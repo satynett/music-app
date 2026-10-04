@@ -24,6 +24,13 @@ export default function App() {
   const [ytResults, setYtResults] = useState([]);
   const [searching, setSearching] = useState(false);
   const [loadingTrackId, setLoadingTrackId] = useState(null);
+  const [playlists, setPlaylists] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem("pulse-playlists") || "[]");
+    } catch {
+      return [];
+    }
+  });
 
   const queueRef = useRef(queue);
   const indexRef = useRef(index);
@@ -274,6 +281,70 @@ export default function App() {
     }
   }
 
+  useEffect(() => {
+    localStorage.setItem("pulse-playlists", JSON.stringify(playlists));
+  }, [playlists]);
+
+  function createPlaylist() {
+    const name = window.prompt("Playlist name");
+    const trimmed = name?.trim();
+    if (!trimmed) return null;
+
+    const existing = playlists.find(
+      (playlist) => playlist.name.toLowerCase() === trimmed.toLowerCase()
+    );
+    if (existing) {
+      setMessage(`Playlist “${existing.name}” already exists.`);
+      return existing.name;
+    }
+
+    setPlaylists((prev) => [...prev, { name: trimmed, tracks: [] }]);
+    setMessage(`Created playlist “${trimmed}”.`);
+    return trimmed;
+  }
+
+  function addToPlaylist(result, playlistName) {
+    if (!playlistName) return;
+
+    setPlaylists((prev) =>
+      prev.map((playlist) => {
+        if (playlist.name !== playlistName) return playlist;
+        if (playlist.tracks.some((track) => track.id === result.id)) return playlist;
+
+        return {
+          ...playlist,
+          tracks: [...playlist.tracks, result],
+        };
+      })
+    );
+
+    setMessage(`Added “${result.title}” to “${playlistName}”.`);
+  }
+
+  async function addYoutubeToQueue(result) {
+    if (queue.some((track) => track.id === `yt-${result.id}`)) {
+      setMessage(`“${result.title}” is already in the queue.`);
+      return;
+    }
+
+    setLoadingTrackId(result.id);
+    setMessage(`Adding “${result.title}” to queue…`);
+
+    try {
+      const streamInfo = await getStreamInfo(result.id);
+      const track = createYoutubeTrack(streamInfo);
+
+      setQueue((prev) =>
+        prev.some((item) => item.id === track.id) ? prev : [...prev, track]
+      );
+      setMessage(`Added “${track.title}” to queue.`);
+    } catch (err) {
+      setMessage(err.message || "Failed to add track to queue");
+    } finally {
+      setLoadingTrackId(null);
+    }
+  }
+
   async function playYoutubeResult(result) {
     setLoadingTrackId(result.id);
     setMessage(`Getting stream for “${result.title}”…`);
@@ -334,14 +405,51 @@ export default function App() {
             <span>{ytResults.length} tracks</span>
           </div>
           {ytResults.map((item) => (
-            <button key={item.id} className="track" disabled={loadingTrackId === item.id} onClick={() => playYoutubeResult(item)}>
+            <div key={item.id} className="track yt-result-row">
               <span className="track-number">▶</span>
               <span className="track-info">
                 <strong>{item.title}</strong>
                 <small>{item.artist} · {formatTime(item.duration)} · YouTube</small>
               </span>
-              <span>{loadingTrackId === item.id ? "Loading…" : "Play"}</span>
-            </button>
+              <div className="yt-result-actions">
+                <button
+                  className="result-action play-result"
+                  disabled={loadingTrackId === item.id}
+                  onClick={() => playYoutubeResult(item)}
+                >
+                  {loadingTrackId === item.id ? "Loading…" : "Play"}
+                </button>
+                <button
+                  className="result-action"
+                  disabled={loadingTrackId === item.id}
+                  onClick={() => addYoutubeToQueue(item)}
+                >
+                  + Add to Queue
+                </button>
+                <button
+                  className="result-action"
+                  onClick={() => createPlaylist()}
+                >
+                  + Create Playlist
+                </button>
+                <select
+                  className="playlist-select"
+                  value=""
+                  onChange={(e) => addToPlaylist(item, e.target.value)}
+                  disabled={!playlists.length}
+                  aria-label={`Add ${item.title} to playlist`}
+                >
+                  <option value="">
+                    {playlists.length ? "Add to Playlist" : "Create a playlist first"}
+                  </option>
+                  {playlists.map((playlist) => (
+                    <option key={playlist.name} value={playlist.name}>
+                      {playlist.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
           ))}
         </section>
       )}
