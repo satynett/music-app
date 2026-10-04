@@ -4,7 +4,6 @@ export class SmartPlayer {
     this.current = null;
     this.next = null;
     this.transition = null;
-    this.transitionToken = 0;
     this.onStateChange = onStateChange;
     this.volume = 0.9;
     this.analyser = null;
@@ -40,7 +39,6 @@ export class SmartPlayer {
   createAudio(track, initialGain = this.volume) {
     const ctx = this.ensureContext();
     const element = new Audio();
-
     element.crossOrigin = "anonymous";
     element.src = track.url;
     element.preload = "auto";
@@ -53,19 +51,7 @@ export class SmartPlayer {
     return { track, element, source, gain };
   }
 
-  cancelTransition() {
-    this.transitionToken += 1;
-    this.transition = null;
-
-    if (this.next) {
-      this.stopSource(this.next);
-      this.next = null;
-    }
-  }
-
   load(track, startAt = 0, initialGain = 0) {
-    this.cancelTransition();
-
     if (this.current) this.stopSource(this.current);
 
     const item = this.createAudio(track, initialGain);
@@ -99,11 +85,10 @@ export class SmartPlayer {
     }
 
     const item = this.current;
-    const ctx = this.ensureContext();
+    this.ensureContext();
 
     await item.element.play();
     this.fadeGain(item.gain, 0, this.volume, 2000);
-
     this.emit({ playing: true });
   }
 
@@ -127,12 +112,10 @@ export class SmartPlayer {
     element.pause();
     gain.gain.cancelScheduledValues(ctx.currentTime);
     gain.gain.setValueAtTime(0, ctx.currentTime);
-
     this.emit({ playing: false });
   }
 
   scheduleTransition(nextTrack, transition, onComplete) {
-    this.cancelTransition();
     this.transition = { nextTrack, transition, started: false, onComplete };
     this.maybeTransition();
   }
@@ -142,7 +125,6 @@ export class SmartPlayer {
 
     if (this.current.element.currentTime >= this.transition.transition.exitAt) {
       this.transition.started = true;
-
       this.crossfade(
         this.transition.nextTrack,
         this.transition.transition,
@@ -154,11 +136,10 @@ export class SmartPlayer {
   async crossfade(nextTrack, transition = {}, onComplete) {
     const { crossfadeSeconds = 4, entryAt = 0 } = transition;
     const ctx = this.ensureContext();
-    const token = ++this.transitionToken;
 
     if (!this.current) {
       await this.play(nextTrack, entryAt);
-      if (token === this.transitionToken) onComplete?.();
+      onComplete?.();
       return;
     }
 
@@ -166,11 +147,8 @@ export class SmartPlayer {
     const next = this.createAudio(nextTrack, 0);
     this.next = next;
 
-    let started = false;
     await new Promise((resolve, reject) => {
       const start = () => {
-        if (started || token !== this.transitionToken) return;
-        started = true;
         next.element.currentTime = entryAt;
         next.element.play().then(resolve).catch(reject);
       };
@@ -184,12 +162,6 @@ export class SmartPlayer {
         }, 4000);
       }
     });
-
-    if (token !== this.transitionToken) {
-      this.stopSource(next);
-      if (this.next === next) this.next = null;
-      return;
-    }
 
     const now = ctx.currentTime;
 
@@ -209,23 +181,21 @@ export class SmartPlayer {
     for (let i = 1; i <= steps; i++) {
       const t = i / steps;
       const time = now + t * crossfadeSeconds;
-      const oldGain = Math.cos(t * Math.PI / 2) * this.volume;
-      const nextGain = Math.sin(t * Math.PI / 2) * this.volume;
-
-      old.gain.gain.linearRampToValueAtTime(oldGain, time);
-      next.gain.gain.linearRampToValueAtTime(nextGain, time);
+      old.gain.gain.linearRampToValueAtTime(
+        Math.cos(t * Math.PI / 2) * this.volume,
+        time
+      );
+      next.gain.gain.linearRampToValueAtTime(
+        Math.sin(t * Math.PI / 2) * this.volume,
+        time
+      );
     }
 
     await new Promise((resolve) =>
       window.setTimeout(resolve, crossfadeSeconds * 1000)
     );
 
-    if (token !== this.transitionToken) {
-      this.stopSource(next);
-      return;
-    }
-
-    // The blend is complete: the outgoing track must be fully stopped.
+    // Crossfade is complete: the outgoing track is no longer playable.
     old.gain.gain.cancelScheduledValues(ctx.currentTime);
     old.gain.gain.setValueAtTime(0, ctx.currentTime);
     old.element.pause();
@@ -246,25 +216,22 @@ export class SmartPlayer {
 
   setVolume(value) {
     this.volume = value;
-
     if (this.current) this.current.gain.gain.value = value;
     if (this.next) this.next.gain.gain.value = value;
   }
 
   stopSource(item) {
     if (!item) return;
-
     item.element.pause();
     item.element.removeAttribute("src");
     item.element.load();
-
     try { item.source.disconnect(); } catch {}
     try { item.gain.disconnect(); } catch {}
   }
 
   destroy() {
-    this.cancelTransition();
     this.stopSource(this.current);
+    this.stopSource(this.next);
     try { this.analyser?.disconnect(); } catch {}
     this.audioContext?.close();
   }
