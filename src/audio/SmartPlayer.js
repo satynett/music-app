@@ -36,10 +36,10 @@ export class SmartPlayer {
     return { track, element, source, gain };
   }
 
-  load(track, startAt = 0) {
+  load(track, startAt = 0, initialGain = 0) {
     if (this.current) this.stopSource(this.current);
 
-    const item = this.createAudio(track);
+    const item = this.createAudio(track, initialGain);
     this.current = item;
 
     item.element.addEventListener("timeupdate", () => {
@@ -53,12 +53,30 @@ export class SmartPlayer {
     return item.element;
   }
 
+  fadeGain(gain, from, to, duration) {
+    const ctx = this.ensureContext();
+    const now = ctx.currentTime;
+
+    gain.gain.cancelScheduledValues(now);
+    gain.gain.setValueAtTime(from, now);
+    gain.gain.linearRampToValueAtTime(to, now + duration / 1000);
+  }
+
   async play(track, startAt = 0) {
-    if (!this.current || this.current.track.id !== track.id) {
-      this.load(track, startAt);
+    const isNewTrack = !this.current || this.current.track.id !== track.id;
+
+    if (isNewTrack) {
+      this.load(track, startAt, 0);
     }
 
-    await this.current.element.play();
+    const item = this.current;
+    const ctx = this.ensureContext();
+
+    await item.element.play();
+
+    // Every explicit start/resume gets a smooth 2-second fade-in.
+    this.fadeGain(item.gain, 0, this.volume, 2000);
+
     this.emit({ playing: true });
   }
 
@@ -81,7 +99,7 @@ export class SmartPlayer {
 
     element.pause();
     gain.gain.cancelScheduledValues(ctx.currentTime);
-    gain.gain.setValueAtTime(this.volume, ctx.currentTime);
+    gain.gain.setValueAtTime(0, ctx.currentTime);
 
     this.emit({ playing: false });
   }
