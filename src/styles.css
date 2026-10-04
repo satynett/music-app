@@ -17,10 +17,10 @@ button,input { font:inherit; } button { color:inherit; border:0; cursor:pointer;
 .results { margin-bottom:35px; }
 .track.result img { width:48px;height:48px;object-fit:cover;border-radius:8px;background:#1b1e26; }
 .track.result { grid-template-columns:48px 1fr auto; }
-.hero { display:grid;grid-template-columns:360px 1fr;gap:55px;align-items:center; }
-.art-column { display:flex;flex-direction:column;gap:18px; }
-.art { aspect-ratio:1;border-radius:24px;display:grid;place-items:center;box-shadow:0 30px 80px #0008; }
-.art span { font-size:90px;opacity:.8; }
+.hero { display:grid;grid-template-columns:1fr 1fr;gap:55px;align-items:center; }
+.art-column { display:block; }
+.art { display:none; }
+.art span { display:none; }
 .eyebrow,.status { color:#858c9d;font-size:12px;letter-spacing:.12em; }
 h1 { font-size:clamp(40px,6vw,76px);line-height:.95;margin:10px 0; }
 .artist { color:#aeb4c1;font-size:18px; }
@@ -40,7 +40,7 @@ input[type=range] { accent-color:#8c7bff; }
 .track { width:100%;display:grid;grid-template-columns:35px 1fr auto;gap:15px;align-items:center;text-align:left;padding:16px 12px;background:transparent;border-top:1px solid #1b1e26; }
 .track:hover,.track.active { background:#11141b; } .track-number { color:#707788; }
 .track-info { display:flex;flex-direction:column;gap:4px;min-width:0; } .track-info small { color:#747c8d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
-@media(max-width:720px) { .topbar{align-items:flex-start;flex-direction:column}.top-actions{justify-content:flex-start}.search-panel{grid-template-columns:1fr}.hero{grid-template-columns:1fr;gap:35px}.art-column{max-width:330px;width:100%;margin:auto}.art{width:100%}h1{font-size:48px}.settings{flex-wrap:wrap}.youtube-shell{margin-top:10px} }
+@media(max-width:720px) { .topbar{align-items:flex-start;flex-direction:column}.top-actions{justify-content:flex-start}.search-panel{grid-template-columns:1fr}.hero{grid-template-columns:1fr;gap:35px}.art-column{width:100%;margin:auto}.art{display:none}.art-column .visualizer{height:300px}h1{font-size:48px}.settings{flex-wrap:wrap}.youtube-shell{margin-top:10px} }
 
 
 .visualizer {
@@ -133,14 +133,16 @@ input[type=range] { accent-color:#8c7bff; }
 }
 .art-column .visualizer {
   margin: 0;
-  height: 105px;
+  height: 430px;
+  width: 100%;
+  border-radius: 28px;
 }
 .art-column .visualizer-overlay {
   top: 10px;
 }
 .art-column .visualizer-overlay strong {
-  font-size: 10px;
-  max-width: 72%;
+  font-size: 14px;
+  max-width: 78%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
