@@ -10,7 +10,10 @@ export class SmartPlayer {
   }
 
   ensureContext() {
-    if (!this.audioContext) this.audioContext = new AudioContext();
+    if (!this.audioContext || this.audioContext.state === "closed") {
+      this.audioContext = new AudioContext();
+      this.analyser = null;
+    }
     if (this.audioContext.state === "suspended") this.audioContext.resume();
     if (!this.analyser) {
       this.analyser = this.audioContext.createAnalyser();
@@ -22,7 +25,8 @@ export class SmartPlayer {
   }
 
   getAnalyser() {
-    this.ensureContext();
+    // Do not create/resume AudioContext from the visualizer.
+    // Chrome requires Web Audio startup to follow a user gesture.
     return this.analyser;
   }
 
