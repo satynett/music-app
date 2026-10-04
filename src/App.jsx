@@ -190,7 +190,7 @@ export default function App() {
     const nextIndex = trackIndex ?? queue.findIndex((item) => item.id === track.id);
     if (nextIndex >= 0) setIndex(nextIndex);
     autoTransitionKey.current = null;
-    player.transition = null;
+    player.cancelTransition();
     setMessage(`Playing “${track.title}”`);
     await player.play(track);
   }
@@ -218,7 +218,7 @@ export default function App() {
 
     try {
       autoTransitionKey.current = null;
-      player.transition = null;
+      player.cancelTransition();
       setMessage("Preparing smart transition…");
 
       const transition = await buildTransition(current, nextTrack);
@@ -244,7 +244,7 @@ export default function App() {
     if (!queue.length) return;
     const prevIndex = (index - 1 + queue.length) % queue.length;
     autoTransitionKey.current = null;
-    player.transition = null;
+    player.cancelTransition();
     setIndex(prevIndex);
     setAnalysis(null);
     await player.play(queue[prevIndex]);
@@ -361,7 +361,7 @@ export default function App() {
       const existingIndex = queue.findIndex((t) => t.id === track.id);
       const nextIndex = existingIndex >= 0 ? existingIndex : queue.length;
       autoTransitionKey.current = null;
-      player.transition = null;
+      player.cancelTransition();
       setIndex(nextIndex);
 
       await player.play(track);
