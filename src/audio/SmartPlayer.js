@@ -1,11 +1,9 @@
-import { } from "./analyzer";
-
 export class SmartPlayer {
   constructor({ onStateChange } = {}) {
     this.audioContext = null;
     this.current = null;
     this.next = null;
-    this.timer = null;
+    this.transition = null;
     this.onStateChange = onStateChange;
   }
 
@@ -29,15 +27,18 @@ export class SmartPlayer {
     const element = new Audio();
     element.src = track.url;
     element.preload = "auto";
-    element.currentTime = startAt;
     const source = ctx.createMediaElementSource(element);
     const gain = ctx.createGain();
     gain.gain.value = 1;
     source.connect(gain).connect(ctx.destination);
     this.current = { track, element, source, gain };
-    element.addEventListener("timeupdate", () => this.emit());
+    element.addEventListener("timeupdate", () => {
+      this.emit();
+      this.maybeTransition();
+    });
     element.addEventListener("loadedmetadata", () => this.emit());
     element.addEventListener("ended", () => this.emit({ ended: true }));
+    element.currentTime = startAt;
     return element;
   }
 
@@ -55,15 +56,27 @@ export class SmartPlayer {
     const step = duration / 4 / 1000;
     gain.gain.cancelScheduledValues(now);
     gain.gain.setValueAtTime(gain.gain.value, now);
-    gain.gain.linearRampToValueAtTime(0.75, now + step);
-    gain.gain.linearRampToValueAtTime(0.5, now + step * 2);
-    gain.gain.linearRampToValueAtTime(0.25, now + step * 3);
-    gain.gain.linearRampToValueAtTime(0, now + step * 4);
+    [0.75, 0.5, 0.25, 0].forEach((value, i) =>
+      gain.gain.linearRampToValueAtTime(value, now + step * (i + 1))
+    );
     window.setTimeout(() => {
       element.pause();
       gain.gain.value = 1;
       this.emit({ playing: false });
     }, duration);
+  }
+
+  scheduleTransition(nextTrack, transition) {
+    this.transition = { nextTrack, transition, started: false };
+    this.maybeTransition();
+  }
+
+  maybeTransition() {
+    if (!this.current || !this.transition || this.transition.started) return;
+    if (this.current.element.currentTime >= this.transition.transition.exitAt) {
+      this.transition.started = true;
+      this.crossfade(this.transition.nextTrack, this.transition.transition).catch(console.error);
+    }
   }
 
   async crossfade(nextTrack, transition = {}) {
@@ -75,30 +88,39 @@ export class SmartPlayer {
     const element = new Audio();
     element.src = nextTrack.url;
     element.preload = "auto";
-    element.currentTime = entryAt;
-
     const source = ctx.createMediaElementSource(element);
     const newGain = ctx.createGain();
     newGain.gain.value = 0;
     source.connect(newGain).connect(ctx.destination);
     this.next = { track: nextTrack, element, source, gain: newGain };
-    await element.play();
+
+    await new Promise((resolve, reject) => {
+      const start = () => element.play().then(resolve).catch(reject);
+      if (element.readyState >= 2) start();
+      else element.addEventListener("canplay", start, { once: true });
+    });
+    element.currentTime = entryAt;
 
     const now = ctx.currentTime;
-    const seconds = crossfadeSeconds;
     old.gain.gain.cancelScheduledValues(now);
     newGain.gain.cancelScheduledValues(now);
     old.gain.gain.setValueAtTime(old.gain.gain.value, now);
     newGain.gain.setValueAtTime(0, now);
-    old.gain.gain.linearRampToValueAtTime(0, now + seconds);
-    newGain.gain.linearRampToValueAtTime(1, now + seconds);
+    old.gain.gain.linearRampToValueAtTime(0, now + crossfadeSeconds);
+    newGain.gain.linearRampToValueAtTime(1, now + crossfadeSeconds);
 
     window.setTimeout(() => {
       this.stopSource(old);
       this.current = this.next;
       this.next = null;
+      this.transition = null;
       this.emit({ playing: true, transitionComplete: true });
-    }, seconds * 1000);
+    }, crossfadeSeconds * 1000);
+  }
+
+  setVolume(value) {
+    if (this.current) this.current.gain.gain.value = value;
+    if (this.next) this.next.gain.gain.value = value;
   }
 
   stopSource(item) {
@@ -110,7 +132,6 @@ export class SmartPlayer {
   }
 
   destroy() {
-    window.clearTimeout(this.timer);
     this.stopSource(this.current);
     this.stopSource(this.next);
     this.audioContext?.close();
