@@ -6,12 +6,24 @@ export class SmartPlayer {
     this.transition = null;
     this.onStateChange = onStateChange;
     this.volume = 0.9;
+    this.analyser = null;
   }
 
   ensureContext() {
     if (!this.audioContext) this.audioContext = new AudioContext();
     if (this.audioContext.state === "suspended") this.audioContext.resume();
+    if (!this.analyser) {
+      this.analyser = this.audioContext.createAnalyser();
+      this.analyser.fftSize = 1024;
+      this.analyser.smoothingTimeConstant = 0.78;
+      this.analyser.connect(this.audioContext.destination);
+    }
     return this.audioContext;
+  }
+
+  getAnalyser() {
+    this.ensureContext();
+    return this.analyser;
   }
 
   emit(extra = {}) {
@@ -32,7 +44,7 @@ export class SmartPlayer {
     const gain = ctx.createGain();
     gain.gain.value = initialGain;
 
-    source.connect(gain).connect(ctx.destination);
+    source.connect(gain).connect(this.analyser);
     return { track, element, source, gain };
   }
 
@@ -149,6 +161,12 @@ export class SmartPlayer {
 
     const now = ctx.currentTime;
 
+    this.emit({
+      transitionStart: true,
+      transitionTrackId: nextTrack.id,
+      transitionSeconds: crossfadeSeconds,
+    });
+
     old.gain.gain.cancelScheduledValues(now);
     next.gain.gain.cancelScheduledValues(now);
 
@@ -206,6 +224,7 @@ export class SmartPlayer {
   destroy() {
     this.stopSource(this.current);
     this.stopSource(this.next);
+    try { this.analyser?.disconnect(); } catch {}
     this.audioContext?.close();
   }
 }
