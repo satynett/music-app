@@ -26,11 +26,17 @@ export default function App() {
   const [loadingTrackId, setLoadingTrackId] = useState(null);
 
   const queueRef = useRef(queue);
+  const indexRef = useRef(index);
   const analyses = useRef(new Map());
+  const autoTransitionKey = useRef(null);
 
   useEffect(() => {
     queueRef.current = queue;
   }, [queue]);
+
+  useEffect(() => {
+    indexRef.current = index;
+  }, [index]);
 
   const player = useMemo(() => new SmartPlayer({
     onStateChange: (state) => {
@@ -95,10 +101,83 @@ export default function App() {
     }
   }
 
+  async function buildTransition(currentTrack, nextTrack) {
+    const [currentAnalysis, nextAnalysis] = await Promise.all([
+      getAnalysis(currentTrack),
+      getAnalysis(nextTrack),
+    ]);
+
+    if (!smart) {
+      return {
+        exitAt: Math.max(0, (currentAnalysis.duration || currentTrack.duration || 180) - 4),
+        entryAt: 0,
+        crossfadeSeconds: 4,
+        bpmA: currentAnalysis.bpm,
+        bpmB: nextAnalysis.bpm,
+      };
+    }
+
+    const base = chooseTransition(currentAnalysis, nextAnalysis);
+    const crossfadeSeconds = Math.max(5, Math.min(base.crossfadeSeconds || 6, 9));
+
+    return {
+      exitAt: Math.max(
+        0,
+        (currentAnalysis.duration || currentTrack.duration || 180) - crossfadeSeconds
+      ),
+      entryAt: nextAnalysis.recommendedStart ?? 0,
+      crossfadeSeconds,
+      bpmA: currentAnalysis.bpm,
+      bpmB: nextAnalysis.bpm,
+    };
+  }
+
+  // Prepare the next track before the current track finishes.
+  // Automatic playback uses the same transition engine as manual Next.
+  useEffect(() => {
+    if (!current || queue.length < 2) return;
+
+    const nextTrack = queue[(index + 1) % queue.length];
+    if (!nextTrack || nextTrack.id === current.id) return;
+
+    const key = `${current.id}->${nextTrack.id}->${smart}`;
+    if (autoTransitionKey.current === key) return;
+    autoTransitionKey.current = key;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const transition = await buildTransition(current, nextTrack);
+        if (cancelled) return;
+
+        setAnalysis({ ...transition, nextTitle: nextTrack.title });
+
+        player.scheduleTransition(nextTrack, transition, () => {
+          const nextIndex = queueRef.current.findIndex((t) => t.id === nextTrack.id);
+          if (nextIndex >= 0) setIndex(nextIndex);
+          setMessage(
+            smart
+              ? `Smart blend → next song starts at ${transition.entryAt.toFixed(1)}s`
+              : "Crossfade done"
+          );
+        });
+      } catch (error) {
+        if (!cancelled) console.error("Auto-transition preparation failed:", error);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [current?.id, queue, index, smart, player]);
+
   async function playTrack(track, trackIndex = null) {
     if (!track) return;
     const nextIndex = trackIndex ?? queue.findIndex((item) => item.id === track.id);
     if (nextIndex >= 0) setIndex(nextIndex);
+    autoTransitionKey.current = null;
+    player.transition = null;
     setMessage(`Playing “${track.title}”`);
     await player.play(track);
   }
@@ -125,35 +204,13 @@ export default function App() {
     const nextTrack = queue[nextIndex];
 
     try {
+      autoTransitionKey.current = null;
+      player.transition = null;
       setMessage("Preparing smart transition…");
 
-      const [currentAnalysis, nextAnalysis] = await Promise.all([
-        getAnalysis(current),
-        getAnalysis(nextTrack),
-      ]);
-
-      let transition;
-
-      if (smart) {
-        const base = chooseTransition(currentAnalysis, nextAnalysis);
-        const crossfadeSeconds = Math.max(5, Math.min(base.crossfadeSeconds || 6, 9));
-
-        transition = {
-          exitAt: Math.max(0, (currentAnalysis.duration || current.duration || 180) - crossfadeSeconds),
-          entryAt: nextAnalysis.recommendedStart ?? 0,
-          crossfadeSeconds,
-          bpmA: currentAnalysis.bpm,
-          bpmB: nextAnalysis.bpm,
-        };
-      } else {
-        transition = {
-          exitAt: currentAnalysis.duration || 180,
-          entryAt: 0,
-          crossfadeSeconds: 4,
-        };
-      }
-
+      const transition = await buildTransition(current, nextTrack);
       setAnalysis({ ...transition, nextTitle: nextTrack.title });
+
       await player.crossfade(nextTrack, transition);
 
       setIndex(nextIndex);
@@ -173,6 +230,8 @@ export default function App() {
   async function previous() {
     if (!queue.length) return;
     const prevIndex = (index - 1 + queue.length) % queue.length;
+    autoTransitionKey.current = null;
+    player.transition = null;
     setIndex(prevIndex);
     setAnalysis(null);
     await player.play(queue[prevIndex]);
@@ -224,6 +283,8 @@ export default function App() {
 
       const existingIndex = queue.findIndex((t) => t.id === track.id);
       const nextIndex = existingIndex >= 0 ? existingIndex : queue.length;
+      autoTransitionKey.current = null;
+      player.transition = null;
       setIndex(nextIndex);
 
       await player.play(track);
