@@ -212,7 +212,7 @@ export default function App() {
             key={track.id}
             onClick={async () => {
               setIndex(i);
-              await player.crossfade(track, 2500, smart ? 2 : 0);
+              await player.crossfade(track, { crossfadeSeconds: 2.5, entryAt: smart ? 2 : 0 });
               setMessage("Transition complete");
             }}
           >
