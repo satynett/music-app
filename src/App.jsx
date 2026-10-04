@@ -68,38 +68,44 @@ export default function App() {
   useEffect(() => () => player.destroy(), [player]);
 
   async function getAnalysis(track) {
-    if (analyses.current.has(track.id)) return analyses.current.get(track.id);
-
-    const ctx = new AudioContext();
-
-    try {
-      const response = await fetch(track.url);
-      if (!response.ok) throw new Error("Failed to fetch audio");
-
-      const arrayBuffer = await response.arrayBuffer();
-      const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
-
-      const result = analyzeTrack(audioBuffer, {
-        analysisSeconds: 25,
-        maxEntry: 12,
-      });
-
-      analyses.current.set(track.id, result);
-      return result;
-    } catch (err) {
-      console.warn("Analysis failed for", track.title, err);
-      const fallback = {
-        duration: track.duration || 180,
-        bpm: null,
-        recommendedStart: 0,
-        reason: "Fallback - analysis failed",
-      };
-      analyses.current.set(track.id, fallback);
-      return fallback;
-    } finally {
-      await ctx.close();
-    }
+  if (analyses.current.has(track.id)) {
+    return analyses.current.get(track.id);
   }
+
+  // For YouTube tracks we use a lighter fallback for now
+  // Full analysis is still unstable with proxied streams
+  if (track.source === "youtube") {
+    const fallback = {
+      duration: track.duration || 180,
+      bpm: null,
+      recommendedStart: 0.8 + Math.random() * 2.5, // random nice entry between 0.8s - 3.3s
+      reason: "YouTube fallback analysis",
+    };
+    analyses.current.set(track.id, fallback);
+    return fallback;
+  }
+
+  // Local files - full analysis
+  const ctx = new AudioContext();
+  try {
+    const response = await fetch(track.url);
+    const buffer = await ctx.decodeAudioData(await response.arrayBuffer());
+    const result = analyzeTrack(buffer);
+    analyses.current.set(track.id, result);
+    return result;
+  } catch (err) {
+    console.warn("Analysis failed:", err);
+    const fallback = {
+      duration: track.duration || 180,
+      bpm: null,
+      recommendedStart: 0,
+    };
+    analyses.current.set(track.id, fallback);
+    return fallback;
+  } finally {
+    await ctx.close();
+  }
+}
 
   async function buildTransition(currentTrack, nextTrack) {
     const [currentAnalysis, nextAnalysis] = await Promise.all([

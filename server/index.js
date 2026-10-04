@@ -126,25 +126,33 @@ app.get("/api/proxy", async (req, res) => {
   if (!target) return res.status(400).send("Missing url");
 
   try {
-    const response = await fetch(target, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-        "Range": req.headers.range || "",
-      },
-    });
+    const headers = {
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    };
 
-    // Important CORS headers
+    // Only forward Range if it exists and is simple
+    if (req.headers.range) {
+      headers["Range"] = req.headers.range;
+    }
+
+    const response = await fetch(target, { headers });
+
+    // CORS headers
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Headers", "Range, Content-Type");
     res.setHeader("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges");
+    res.setHeader("Accept-Ranges", "bytes");
 
     res.status(response.status);
 
-    ["content-type", "content-length", "accept-ranges", "content-range"].forEach((h) => {
+    // Copy important headers
+    const copyHeaders = ["content-type", "content-length", "content-range", "accept-ranges"];
+    copyHeaders.forEach((h) => {
       const value = response.headers.get(h);
       if (value) res.setHeader(h, value);
     });
 
+    // Stream the response
     const reader = response.body.getReader();
     while (true) {
       const { done, value } = await reader.read();
@@ -154,7 +162,9 @@ app.get("/api/proxy", async (req, res) => {
     res.end();
   } catch (err) {
     console.error("Proxy error:", err.message);
-    if (!res.headersSent) res.status(500).send("Proxy failed");
+    if (!res.headersSent) {
+      res.status(500).send("Proxy failed");
+    }
   }
 });
 
