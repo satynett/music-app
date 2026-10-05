@@ -46,6 +46,21 @@ export class SmartPlayer {
     element.src = track.url;
     element.preload = "auto";
 
+    element.addEventListener("error", () => {
+      const mediaError = element.error;
+      this.emit({
+        mediaError: {
+          code: mediaError?.code || 0,
+          message: mediaError?.message || "Audio resource could not be loaded",
+          trackId: track.id,
+        },
+      });
+    });
+
+    element.addEventListener("stalled", () => {
+      this.emit({ mediaStalled: true, mediaTrackId: track.id });
+    });
+
     const source = ctx.createMediaElementSource(element);
     const gain = ctx.createGain();
     gain.gain.value = initialGain;
@@ -212,6 +227,10 @@ export class SmartPlayer {
       // Do not wait for canplay/canplaythrough before calling play().
       await next.element.play();
 
+      if (next.element.paused) {
+        throw new Error("Next track did not start playing");
+      }
+
       if (token !== this._crossfadeToken) {
         throw new Error("Transition cancelled");
       }
@@ -291,6 +310,7 @@ export class SmartPlayer {
       if (token !== this._crossfadeToken) return;
 
       this.crossfading = false;
+      this.emit({ playing: false, transitionError: error.message });
       if (this.next === next) {
         this.stopSource(next);
         this.next = null;
