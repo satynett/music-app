@@ -216,20 +216,38 @@ export class SmartPlayer {
           error ? reject(error) : resolve();
         };
 
-        const start = () => {
+        // Start the media element immediately. For a manual Next click this
+        // preserves the browser's user-gesture permission even while the
+        // media is still buffering. Gain stays at 0 until the crossfade.
+        const playPromise = next.element.play();
+
+        const start = async () => {
           if (token !== this._crossfadeToken) {
             finish(new Error("Transition cancelled"));
             return;
           }
 
-          next.element.currentTime = entryAt;
-          next.element.play().then(() => finish()).catch(finish);
+          try {
+            await playPromise;
+            if (token !== this._crossfadeToken) {
+              finish(new Error("Transition cancelled"));
+              return;
+            }
+
+            if (Number.isFinite(entryAt) && entryAt > 0 && next.element.readyState >= 1) {
+              next.element.currentTime = entryAt;
+            }
+
+            finish();
+          } catch (error) {
+            finish(error);
+          }
         };
 
-        if (next.element.readyState >= 3) {
+        if (next.element.readyState >= 2) {
           start();
         } else {
-          next.element.addEventListener("canplaythrough", start, { once: true });
+          next.element.addEventListener("canplay", start, { once: true });
 
           window.setTimeout(() => {
             if (token !== this._crossfadeToken) {
