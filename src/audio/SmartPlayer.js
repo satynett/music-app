@@ -207,59 +207,26 @@ export class SmartPlayer {
     this.crossfading = true;
 
     try {
-      await new Promise((resolve, reject) => {
-        let settled = false;
+      // Start the new media element immediately. The Next button is a
+      // real user gesture, so this is the safest point to request playback.
+      // Do not wait for canplay/canplaythrough before calling play().
+      await next.element.play();
 
-        const finish = (error) => {
-          if (settled) return;
-          settled = true;
-          error ? reject(error) : resolve();
-        };
+      if (token !== this._crossfadeToken) {
+        throw new Error("Transition cancelled");
+      }
 
-        // Start the media element immediately. For a manual Next click this
-        // preserves the browser's user-gesture permission even while the
-        // media is still buffering. Gain stays at 0 until the crossfade.
-        const playPromise = next.element.play();
-
-        const start = async () => {
-          if (token !== this._crossfadeToken) {
-            finish(new Error("Transition cancelled"));
-            return;
-          }
-
-          try {
-            await playPromise;
-            if (token !== this._crossfadeToken) {
-              finish(new Error("Transition cancelled"));
-              return;
-            }
-
-            if (Number.isFinite(entryAt) && entryAt > 0 && next.element.readyState >= 1) {
-              next.element.currentTime = entryAt;
-            }
-
-            finish();
-          } catch (error) {
-            finish(error);
+      // Manual Next uses entryAt=0. Automatic transitions may choose a
+      // later entry point; seek once metadata is available.
+      if (Number.isFinite(entryAt) && entryAt > 0) {
+        const seekNext = () => {
+          if (token === this._crossfadeToken && next.element.readyState >= 1) {
+            try { next.element.currentTime = entryAt; } catch {}
           }
         };
-
-        if (next.element.readyState >= 2) {
-          start();
-        } else {
-          next.element.addEventListener("canplay", start, { once: true });
-
-          window.setTimeout(() => {
-            if (token !== this._crossfadeToken) {
-              finish(new Error("Transition cancelled"));
-            } else if (next.element.readyState >= 2) {
-              start();
-            } else {
-              finish(new Error("Next track could not start"));
-            }
-          }, 4000);
-        }
-      });
+        if (next.element.readyState >= 1) seekNext();
+        else next.element.addEventListener("loadedmetadata", seekNext, { once: true });
+      }
 
       if (token !== this._crossfadeToken) return;
 
