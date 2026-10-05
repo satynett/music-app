@@ -7,6 +7,9 @@ export class SmartPlayer {
     this.onStateChange = onStateChange;
     this.volume = 0.9;
     this.analyser = null;
+    this.crossfading = false;
+    this._crossfadeToken = 0;
+    this._transitionTimer = null;
   }
 
   ensureContext() {
@@ -51,7 +54,26 @@ export class SmartPlayer {
     return { track, element, source, gain };
   }
 
+  cancelTransition() {
+    this._crossfadeToken += 1;
+
+    if (this._transitionTimer) {
+      window.clearTimeout(this._transitionTimer);
+      this._transitionTimer = null;
+    }
+
+    this.transition = null;
+    this.crossfading = false;
+
+    if (this.next) {
+      this.stopSource(this.next);
+      this.next = null;
+    }
+  }
+
   load(track, startAt = 0, initialGain = 0) {
+    this.cancelTransition();
+
     if (this.current) this.stopSource(this.current);
 
     const item = this.createAudio(track, initialGain);
@@ -61,8 +83,14 @@ export class SmartPlayer {
       this.emit();
       this.maybeTransition();
     });
+
     item.element.addEventListener("loadedmetadata", () => this.emit());
-    item.element.addEventListener("ended", () => this.emit({ ended: true }));
+
+    item.element.addEventListener("ended", () => {
+      if (this.current?.track.id === track.id && !this.crossfading) {
+        this.emit({ ended: true });
+      }
+    });
 
     item.element.currentTime = startAt;
     return item.element;
@@ -78,11 +106,10 @@ export class SmartPlayer {
   }
 
   async play(track, startAt = 0) {
-    const isNewTrack = !this.current || this.current.track.id !== track.id;
+    this.cancelTransition();
 
-    if (isNewTrack) {
-      this.load(track, startAt, 0);
-    }
+    const isNewTrack = !this.current || this.current.track.id !== track.id;
+    if (isNewTrack) this.load(track, startAt, 0);
 
     const item = this.current;
     this.ensureContext();
@@ -94,6 +121,8 @@ export class SmartPlayer {
 
   async fadePause(duration = 2000) {
     if (!this.current) return;
+
+    this.cancelTransition();
 
     const { element, gain } = this.current;
     const ctx = this.ensureContext();
@@ -109,6 +138,8 @@ export class SmartPlayer {
 
     await new Promise((resolve) => window.setTimeout(resolve, duration));
 
+    if (this.current?.element !== element) return;
+
     element.pause();
     gain.gain.cancelScheduledValues(ctx.currentTime);
     gain.gain.setValueAtTime(0, ctx.currentTime);
@@ -116,25 +147,51 @@ export class SmartPlayer {
   }
 
   scheduleTransition(nextTrack, transition, onComplete) {
-    this.transition = { nextTrack, transition, started: false, onComplete };
+    this.cancelTransition();
+
+    this.transition = {
+      nextTrack,
+      transition,
+      started: false,
+      onComplete,
+    };
+
     this.maybeTransition();
   }
 
   maybeTransition() {
-    if (!this.current || !this.transition || this.transition.started) return;
+    if (
+      !this.current ||
+      !this.transition ||
+      this.transition.started ||
+      this.crossfading
+    ) {
+      return;
+    }
 
     if (this.current.element.currentTime >= this.transition.transition.exitAt) {
-      this.transition.started = true;
+      const pending = this.transition;
+      pending.started = true;
+
       this.crossfade(
-        this.transition.nextTrack,
-        this.transition.transition,
-        this.transition.onComplete
-      ).catch(console.error);
+        pending.nextTrack,
+        pending.transition,
+        pending.onComplete
+      ).catch((error) => {
+        console.error("Crossfade failed:", error);
+      });
     }
   }
 
   async crossfade(nextTrack, transition = {}, onComplete) {
-    const { crossfadeSeconds = 4, entryAt = 0 } = transition;
+    // A new crossfade always owns the transition slot.
+    this.cancelTransition();
+
+    const crossfadeSeconds = Math.max(
+      3,
+      Math.min(Number(transition.crossfadeSeconds) || 4, 6)
+    );
+    const entryAt = Math.max(0, Number(transition.entryAt) || 0);
     const ctx = this.ensureContext();
 
     if (!this.current) {
@@ -143,96 +200,147 @@ export class SmartPlayer {
       return;
     }
 
+    const token = ++this._crossfadeToken;
     const old = this.current;
     const next = this.createAudio(nextTrack, 0);
     this.next = next;
+    this.crossfading = true;
 
-    await new Promise((resolve, reject) => {
-      const start = () => {
-        next.element.currentTime = entryAt;
-        next.element.play().then(resolve).catch(reject);
-      };
+    try {
+      await new Promise((resolve, reject) => {
+        let settled = false;
 
-      if (next.element.readyState >= 3) {
-        start();
-      } else {
-        next.element.addEventListener("canplaythrough", start, { once: true });
-        setTimeout(() => {
-          if (next.element.readyState >= 2) start();
-        }, 4000);
+        const finish = (error) => {
+          if (settled) return;
+          settled = true;
+          error ? reject(error) : resolve();
+        };
+
+        const start = () => {
+          if (token !== this._crossfadeToken) {
+            finish(new Error("Transition cancelled"));
+            return;
+          }
+
+          next.element.currentTime = entryAt;
+          next.element.play().then(() => finish()).catch(finish);
+        };
+
+        if (next.element.readyState >= 3) {
+          start();
+        } else {
+          next.element.addEventListener("canplaythrough", start, { once: true });
+
+          window.setTimeout(() => {
+            if (token !== this._crossfadeToken) {
+              finish(new Error("Transition cancelled"));
+            } else if (next.element.readyState >= 2) {
+              start();
+            } else {
+              finish(new Error("Next track could not start"));
+            }
+          }, 4000);
+        }
+      });
+
+      if (token !== this._crossfadeToken) return;
+
+      const now = ctx.currentTime;
+
+      this.emit({
+        transitionStart: true,
+        transitionFromTrackId: old.track.id,
+        transitionTrackId: nextTrack.id,
+        transitionSeconds: crossfadeSeconds,
+      });
+
+      old.gain.gain.cancelScheduledValues(now);
+      next.gain.gain.cancelScheduledValues(now);
+      old.gain.gain.setValueAtTime(this.volume, now);
+      next.gain.gain.setValueAtTime(0, now);
+
+      const steps = 32;
+      for (let i = 1; i <= steps; i++) {
+        const t = i / steps;
+        const time = now + t * crossfadeSeconds;
+
+        old.gain.gain.linearRampToValueAtTime(
+          Math.cos(t * Math.PI / 2) * this.volume,
+          time
+        );
+
+        next.gain.gain.linearRampToValueAtTime(
+          Math.sin(t * Math.PI / 2) * this.volume,
+          time
+        );
       }
-    });
 
-    const now = ctx.currentTime;
+      await new Promise((resolve) => {
+        this._transitionTimer = window.setTimeout(
+          resolve,
+          crossfadeSeconds * 1000
+        );
+      });
+      this._transitionTimer = null;
 
-    this.emit({
-      transitionStart: true,
-      transitionFromTrackId: old.track.id,
-      transitionTrackId: nextTrack.id,
-      transitionSeconds: crossfadeSeconds,
-    });
+      if (token !== this._crossfadeToken) return;
 
-    old.gain.gain.cancelScheduledValues(now);
-    next.gain.gain.cancelScheduledValues(now);
-    old.gain.gain.setValueAtTime(old.gain.gain.value, now);
-    next.gain.gain.setValueAtTime(0, now);
+      old.gain.gain.cancelScheduledValues(ctx.currentTime);
+      old.gain.gain.setValueAtTime(0, ctx.currentTime);
+      old.element.pause();
+      this.stopSource(old);
 
-    const steps = 32;
-    for (let i = 1; i <= steps; i++) {
-      const t = i / steps;
-      const time = now + t * crossfadeSeconds;
-      old.gain.gain.linearRampToValueAtTime(
-        Math.cos(t * Math.PI / 2) * this.volume,
-        time
-      );
-      next.gain.gain.linearRampToValueAtTime(
-        Math.sin(t * Math.PI / 2) * this.volume,
-        time
-      );
+      this.current = next;
+      this.next = null;
+      this.transition = null;
+      this.crossfading = false;
+
+      this.emit({
+        playing: true,
+        transitionComplete: true,
+        transitionTrackId: nextTrack.id,
+      });
+
+      onComplete?.();
+    } catch (error) {
+      if (token !== this._crossfadeToken) return;
+
+      this.crossfading = false;
+      if (this.next === next) {
+        this.stopSource(next);
+        this.next = null;
+      }
+      throw error;
     }
-
-    await new Promise((resolve) =>
-      window.setTimeout(resolve, crossfadeSeconds * 1000)
-    );
-
-    // Crossfade is complete: the outgoing track is no longer playable.
-    old.gain.gain.cancelScheduledValues(ctx.currentTime);
-    old.gain.gain.setValueAtTime(0, ctx.currentTime);
-    old.element.pause();
-    this.stopSource(old);
-
-    this.current = next;
-    this.next = null;
-    this.transition = null;
-
-    this.emit({
-      playing: true,
-      transitionComplete: true,
-      transitionTrackId: nextTrack.id,
-    });
-
-    onComplete?.();
   }
 
   setVolume(value) {
-    this.volume = value;
-    if (this.current) this.current.gain.gain.value = value;
-    if (this.next) this.next.gain.gain.value = value;
+    this.volume = Math.max(0, Math.min(1, value));
+
+    if (this.current) this.current.gain.gain.value = this.volume;
+    if (this.next) this.next.gain.gain.value = this.volume;
   }
 
   stopSource(item) {
     if (!item) return;
+
     item.element.pause();
     item.element.removeAttribute("src");
     item.element.load();
+
     try { item.source.disconnect(); } catch {}
     try { item.gain.disconnect(); } catch {}
   }
 
   destroy() {
+    this.cancelTransition();
     this.stopSource(this.current);
-    this.stopSource(this.next);
+    this.current = null;
+
     try { this.analyser?.disconnect(); } catch {}
     this.audioContext?.close();
+
+    this.audioContext = null;
+    this.analyser = null;
   }
 }
