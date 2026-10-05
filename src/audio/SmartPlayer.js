@@ -69,7 +69,27 @@ export class SmartPlayer {
     return { track, element, source, gain };
   }
 
-  cancelTransition() {
+  attachListeners(item) {
+    const { element } = item;
+
+    element.addEventListener("timeupdate", () => {
+      if (this.current !== item) return;
+      this.emit();
+      this.maybeTransition();
+    });
+
+    element.addEventListener("loadedmetadata", () => {
+      if (this.current === item) this.emit();
+    });
+
+    element.addEventListener("ended", () => {
+      if (this.current === item && !this.crossfading) {
+        this.emit({ ended: true });
+      }
+    });
+  }
+
+  abortCrossfade() {
     this._crossfadeToken += 1;
 
     if (this._transitionTimer) {
@@ -77,13 +97,24 @@ export class SmartPlayer {
       this._transitionTimer = null;
     }
 
-    this.transition = null;
+    if (this.crossfading && this.current && this.audioContext) {
+      const g = this.current.gain.gain;
+      const v = g.value;
+      g.cancelScheduledValues(this.audioContext.currentTime);
+      g.setValueAtTime(v, this.audioContext.currentTime);
+    }
+
     this.crossfading = false;
 
     if (this.next) {
       this.stopSource(this.next);
       this.next = null;
     }
+  }
+
+  cancelTransition() {
+    this.abortCrossfade();
+    this.transition = null;
   }
 
   load(track, startAt = 0, initialGain = 0) {
@@ -93,19 +124,7 @@ export class SmartPlayer {
 
     const item = this.createAudio(track, initialGain);
     this.current = item;
-
-    item.element.addEventListener("timeupdate", () => {
-      this.emit();
-      this.maybeTransition();
-    });
-
-    item.element.addEventListener("loadedmetadata", () => this.emit());
-
-    item.element.addEventListener("ended", () => {
-      if (this.current?.track.id === track.id && !this.crossfading) {
-        this.emit({ ended: true });
-      }
-    });
+    this.attachListeners(item);
 
     item.element.currentTime = startAt;
     return item.element;
@@ -162,8 +181,6 @@ export class SmartPlayer {
   }
 
   scheduleTransition(nextTrack, transition, onComplete) {
-    this.cancelTransition();
-
     this.transition = {
       nextTrack,
       transition,
@@ -171,7 +188,7 @@ export class SmartPlayer {
       onComplete,
     };
 
-    this.maybeTransition();
+    if (!this.crossfading) this.maybeTransition();
   }
 
   maybeTransition() {
@@ -184,9 +201,13 @@ export class SmartPlayer {
       return;
     }
 
-    if (this.current.element.currentTime >= this.transition.transition.exitAt) {
+    const exitAt = Number(this.transition.transition?.exitAt);
+    if (!Number.isFinite(exitAt)) return;
+
+    if (this.current.element.currentTime >= exitAt) {
       const pending = this.transition;
       pending.started = true;
+      this.transition = null;
 
       this.crossfade(
         pending.nextTrack,
@@ -199,15 +220,15 @@ export class SmartPlayer {
   }
 
   async crossfade(nextTrack, transition = {}, onComplete) {
-    // A new crossfade always owns the transition slot.
-    this.cancelTransition();
+    this.abortCrossfade();
+    this.transition = null;
 
-    const crossfadeSeconds = Math.max(
+    const ctx = this.ensureContext();
+    const entryAt = Math.max(0, Number(transition.entryAt) || 0);
+    let crossfadeSeconds = Math.max(
       3,
       Math.min(Number(transition.crossfadeSeconds) || 4, 6)
     );
-    const entryAt = Math.max(0, Number(transition.entryAt) || 0);
-    const ctx = this.ensureContext();
 
     if (!this.current) {
       await this.play(nextTrack, entryAt);
@@ -215,37 +236,23 @@ export class SmartPlayer {
       return;
     }
 
+    const left =
+      this.current.element.duration - this.current.element.currentTime;
+
+    if (Number.isFinite(left) && left > 0.5) {
+      crossfadeSeconds = Math.min(crossfadeSeconds, left);
+    }
+
     const token = ++this._crossfadeToken;
     const old = this.current;
     const next = this.createAudio(nextTrack, 0);
+    this.attachListeners(next);
     this.next = next;
     this.crossfading = true;
 
     try {
-      // Start the new media element immediately. The Next button is a
-      // real user gesture, so this is the safest point to request playback.
-      // Do not wait for canplay/canplaythrough before calling play().
+      next.element.currentTime = entryAt;
       await next.element.play();
-
-      if (next.element.paused) {
-        throw new Error("Next track did not start playing");
-      }
-
-      if (token !== this._crossfadeToken) {
-        throw new Error("Transition cancelled");
-      }
-
-      // Manual Next uses entryAt=0. Automatic transitions may choose a
-      // later entry point; seek once metadata is available.
-      if (Number.isFinite(entryAt) && entryAt > 0) {
-        const seekNext = () => {
-          if (token === this._crossfadeToken && next.element.readyState >= 1) {
-            try { next.element.currentTime = entryAt; } catch {}
-          }
-        };
-        if (next.element.readyState >= 1) seekNext();
-        else next.element.addEventListener("loadedmetadata", seekNext, { once: true });
-      }
 
       if (token !== this._crossfadeToken) return;
 
@@ -285,18 +292,20 @@ export class SmartPlayer {
           crossfadeSeconds * 1000
         );
       });
+
       this._transitionTimer = null;
 
       if (token !== this._crossfadeToken) return;
 
       old.gain.gain.cancelScheduledValues(ctx.currentTime);
       old.gain.gain.setValueAtTime(0, ctx.currentTime);
-      old.element.pause();
       this.stopSource(old);
+
+      next.gain.gain.cancelScheduledValues(ctx.currentTime);
+      next.gain.gain.setValueAtTime(this.volume, ctx.currentTime);
 
       this.current = next;
       this.next = null;
-      this.transition = null;
       this.crossfading = false;
 
       this.emit({
@@ -310,11 +319,13 @@ export class SmartPlayer {
       if (token !== this._crossfadeToken) return;
 
       this.crossfading = false;
-      this.emit({ playing: false, transitionError: error.message });
+
       if (this.next === next) {
         this.stopSource(next);
         this.next = null;
       }
+
+      this.emit({ playing: false, transitionError: error.message });
       throw error;
     }
   }
@@ -322,8 +333,9 @@ export class SmartPlayer {
   setVolume(value) {
     this.volume = Math.max(0, Math.min(1, value));
 
+    if (this.crossfading) return;
+
     if (this.current) this.current.gain.gain.value = this.volume;
-    if (this.next) this.next.gain.gain.value = this.volume;
   }
 
   stopSource(item) {
