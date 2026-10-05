@@ -251,7 +251,9 @@ export default function App() {
         bpmB: null,
       };
 
-      setIndex(nextIndex);
+      // Keep React's current-track index unchanged until SmartPlayer
+      // finishes the handoff. Changing it here would re-run the automatic
+      // transition effect and cancel the crossfade we just started.
       setAnalysis({ ...quickTransition, nextTitle: nextTrack.title });
       setMessage(smart ? "Starting smart transition…" : "Crossfading…");
 
