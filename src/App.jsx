@@ -36,6 +36,10 @@ export default function App() {
   const indexRef = useRef(index);
   const analyses = useRef(new Map());
   const autoTransitionKey = useRef(null);
+  const swipeRef = useRef(null);
+  const suppressQueueClick = useRef(false);
+  const [draggedQueueId, setDraggedQueueId] = useState(null);
+  const [swipedQueueId, setSwipedQueueId] = useState(null);
 
   useEffect(() => {
     queueRef.current = queue;
@@ -198,7 +202,11 @@ export default function App() {
 
     return () => {
       cancelled = true;
-      if (autoTransitionKey.current === key) {
+      if (
+        autoTransitionKey.current === key &&
+        !player.crossfading &&
+        player.transition?.nextTrack?.id === nextTrack.id
+      ) {
         player.cancelTransition();
       }
     };
@@ -284,6 +292,144 @@ export default function App() {
         setMessage("Playback failed: " + playError.message);
       }
     }
+  }
+
+
+  function reorderQueue(sourceId, targetId) {
+    if (!sourceId || !targetId || sourceId === targetId) return;
+    const currentId = queueRef.current[indexRef.current]?.id;
+    setQueue((prev) => {
+      const from = prev.findIndex((track) => track.id === sourceId);
+      const to = prev.findIndex((track) => track.id === targetId);
+      if (from < 0 || to < 0 || from === to) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      const nextCurrentIndex = next.findIndex((track) => track.id === currentId);
+      if (nextCurrentIndex >= 0) setIndex(nextCurrentIndex);
+      return next;
+    });
+  }
+
+  function handleQueueDragStart(event, track) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", track.id);
+    setDraggedQueueId(track.id);
+  }
+
+  function handleQueueDragEnd() {
+    setDraggedQueueId(null);
+  }
+
+  function handleQueueDrop(event, targetTrack) {
+    event.preventDefault();
+    const sourceId = event.dataTransfer.getData("text/plain");
+    reorderQueue(sourceId, targetTrack.id);
+    setDraggedQueueId(null);
+  }
+
+  function handleQueuePointerDown(event, track) {
+    if (event.pointerType === "mouse") return;
+    swipeRef.current = {
+      id: track.id,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+
+  function handleQueuePointerMove(event, track) {
+    const swipe = swipeRef.current;
+    if (!swipe || swipe.pointerId !== event.pointerId || swipe.id !== track.id) return;
+    const dx = event.clientX - swipe.startX;
+    const dy = event.clientY - swipe.startY;
+    if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 10) return;
+    if (dx < -10) {
+      swipe.moved = true;
+      setSwipedQueueId(track.id);
+    }
+  }
+
+  async function removeFromQueue(track) {
+    const q = queueRef.current;
+    const currentTrack = q[indexRef.current];
+    if (!q.some((item) => item.id === track.id)) return;
+
+    if (currentTrack?.id === track.id) {
+      if (q.length === 1) {
+        autoTransitionKey.current = null;
+        player.cancelTransition();
+        await player.fadePause(1200).catch(() => {});
+        setQueue([]);
+        setIndex(0);
+        setAnalysis(null);
+        setMessage("Queue cleared.");
+        return;
+      }
+
+      const nextTrack = q[(indexRef.current + 1) % q.length];
+      const currentDuration = Number(currentTrack.duration) || Number(player.current?.element?.duration) || 180;
+      const crossfadeSeconds = Math.max(3, Math.min(smart ? 5 : 4, 6));
+      const transition = {
+        exitAt: Math.max(0, currentDuration - crossfadeSeconds),
+        entryAt: 0,
+        crossfadeSeconds,
+        bpmA: null,
+        bpmB: null,
+      };
+
+      try {
+        autoTransitionKey.current = null;
+        player.cancelTransition();
+        setMessage("Removing current track and blending to next…");
+        await player.crossfade(nextTrack, transition);
+      } catch (error) {
+        setMessage("Playback failed: " + error.message);
+        return;
+      }
+
+      const nextQueue = q.filter((item) => item.id !== track.id);
+      const nextIndex = nextQueue.findIndex((item) => item.id === nextTrack.id);
+      setQueue(nextQueue);
+      setIndex(Math.max(0, nextIndex));
+      setMessage("Current track removed.");
+      return;
+    }
+
+    const currentId = currentTrack?.id;
+    const nextQueue = q.filter((item) => item.id !== track.id);
+    const nextIndex = nextQueue.findIndex((item) => item.id === currentId);
+    setQueue(nextQueue);
+    setIndex(Math.max(0, nextIndex));
+    setSwipedQueueId(null);
+  }
+
+  function handleQueuePointerUp(event, track) {
+    const swipe = swipeRef.current;
+    if (!swipe || swipe.pointerId !== event.pointerId || swipe.id !== track.id) return;
+    const dx = event.clientX - swipe.startX;
+    const shouldDelete = dx < -80 && swipe.moved;
+    swipeRef.current = null;
+
+    if (shouldDelete) {
+      suppressQueueClick.current = true;
+      setSwipedQueueId(track.id);
+      removeFromQueue(track).finally(() => {
+        window.setTimeout(() => {
+          suppressQueueClick.current = false;
+          setSwipedQueueId(null);
+        }, 0);
+      });
+    } else {
+      setSwipedQueueId(null);
+    }
+  }
+
+  function handleQueuePointerCancel() {
+    swipeRef.current = null;
+    setSwipedQueueId(null);
   }
 
   async function previous() {
@@ -571,14 +717,46 @@ export default function App() {
           </div>
         ) : (
           queue.map((track, i) => (
-            <button className={`track ${i === index ? "active" : ""}`} key={track.id} onClick={() => playTrack(track, i)}>
-              <span className="track-number">{i + 1}</span>
-              <span className="track-info">
-                <strong>{track.title}</strong>
-                <small>{track.artist} · YouTube</small>
-              </span>
-              <span>{i === index && playing ? "Playing" : "Play"}</span>
-            </button>
+            <div
+              className={"queue-track-wrap " + (i === index ? "active " : "") + (draggedQueueId === track.id ? "dragging " : "") + (swipedQueueId === track.id ? "swiped" : "")}
+              key={track.id}
+              draggable
+              onDragStart={(event) => handleQueueDragStart(event, track)}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => handleQueueDrop(event, track)}
+              onDragEnd={handleQueueDragEnd}
+              onPointerDown={(event) => handleQueuePointerDown(event, track)}
+              onPointerMove={(event) => handleQueuePointerMove(event, track)}
+              onPointerUp={(event) => handleQueuePointerUp(event, track)}
+              onPointerCancel={handleQueuePointerCancel}
+              title="Drag to reorder · swipe left to remove"
+            >
+              <button
+                className={"track " + (i === index ? "active" : "")}
+                onClick={() => {
+                  if (suppressQueueClick.current) return;
+                  playTrack(track, i);
+                }}
+              >
+                <span className="queue-drag-handle" aria-hidden="true">⋮⋮</span>
+                <span className="track-number">{i + 1}</span>
+                <span className="track-info">
+                  <strong>{track.title}</strong>
+                  <small>{track.artist} · YouTube</small>
+                </span>
+                <span>{i === index && playing ? "Playing" : "Play"}</span>
+              </button>
+              <button
+                className="queue-delete"
+                aria-label={"Remove " + track.title + " from queue"}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  removeFromQueue(track);
+                }}
+              >
+                ×
+              </button>
+            </div>
           ))
         )}
       </section>
