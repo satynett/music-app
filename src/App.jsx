@@ -50,7 +50,23 @@ export default function App() {
       setPosition(state.currentTime);
       setDuration(state.duration);
       if (state.playing !== undefined) setPlaying(state.playing);
-      if (state.ended) setPlaying(false);
+      if (state.ended) {
+        setPlaying(false);
+        const q = queueRef.current;
+        const i = indexRef.current;
+        if (q.length > 1) {
+          const nextIndex = (i + 1) % q.length;
+          const nextTrack = q[nextIndex];
+          autoTransitionKey.current = null;
+          player.cancelTransition();
+          setIndex(nextIndex);
+          player.play(nextTrack).then(() => {
+            setMessage("Playing next song.");
+          }).catch((error) => {
+            setMessage("Next track failed: " + error.message);
+          });
+        }
+      }
 
       if (state.transitionStart) {
         const currentTrack = queueRef.current.find((t) => t.id === state.transitionFromTrackId);
@@ -131,7 +147,7 @@ export default function App() {
     }
 
     const base = chooseTransition(currentAnalysis, nextAnalysis);
-    const crossfadeSeconds = Math.max(5, Math.min(base.crossfadeSeconds || 6, 9));
+    const crossfadeSeconds = Math.max(3, Math.min(base.crossfadeSeconds || 6, 6));
 
     return {
       exitAt: Math.max(
@@ -182,6 +198,9 @@ export default function App() {
 
     return () => {
       cancelled = true;
+      if (autoTransitionKey.current === key) {
+        player.cancelTransition();
+      }
     };
   }, [current?.id, queue, index, smart, player]);
 
