@@ -235,27 +235,52 @@ export default function App() {
     const nextIndex = (index + 1) % queue.length;
     const nextTrack = queue[nextIndex];
 
+    // Manual Next is a direct user action. Start the next media element
+    // before awaiting async analysis so the browser keeps the user gesture.
     try {
       autoTransitionKey.current = null;
       player.cancelTransition();
-      setMessage("Preparing smart transition…");
 
-      const transition = await buildTransition(current, nextTrack);
-      setAnalysis({ ...transition, nextTitle: nextTrack.title });
-
-      await player.crossfade(nextTrack, transition);
+      const currentDuration = Number(current.duration) || Number(player.current?.element?.duration) || 180;
+      const quickCrossfade = Math.max(3, Math.min(smart ? 5 : 4, 6));
+      const quickTransition = {
+        exitAt: Math.max(0, currentDuration - quickCrossfade),
+        entryAt: 0,
+        crossfadeSeconds: quickCrossfade,
+        bpmA: null,
+        bpmB: null,
+      };
 
       setIndex(nextIndex);
+      setAnalysis({ ...quickTransition, nextTitle: nextTrack.title });
+      setMessage(smart ? "Starting smart transition…" : "Crossfading…");
+
+      // This call happens directly from the button handler, preserving
+      // browser media-play permission.
+      await player.crossfade(nextTrack, quickTransition);
+
       setMessage(
         smart
-          ? `Smart blend → next song starts at ${transition.entryAt.toFixed(1)}s`
-          : "Crossfade done"
+          ? "Smart blend complete"
+          : "Crossfade complete"
       );
+
+      // Refine the transition metadata in the background for the next
+      // automatic transition; never block manual playback on analysis.
+      buildTransition(current, nextTrack)
+        .then((transition) => {
+          setAnalysis({ ...transition, nextTitle: nextTrack.title });
+        })
+        .catch((error) => console.warn("Background transition analysis failed:", error));
     } catch (error) {
-      console.error(error);
-      setMessage("Transition failed: " + error.message);
+      console.error("Next track failed:", error);
+      setMessage("Next track failed: " + error.message);
       setIndex(nextIndex);
-      await player.play(nextTrack);
+      try {
+        await player.play(nextTrack);
+      } catch (playError) {
+        setMessage("Playback failed: " + playError.message);
+      }
     }
   }
 
